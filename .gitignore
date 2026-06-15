@@ -1,0 +1,11 @@
+.DS_Store
+*.zip
+*.tgz
+runtime-full/
+bin/node-18
+bin/node-20
+bin/node-22
+bin/node-24
+__pycache__/
+*.pyc
+.pytest_cache/

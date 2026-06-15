@@ -1,0 +1,28 @@
+hostpanel-nodejs v1.0.0 test scenario
+
+1. Build package with ./build.sh.
+2. Upload and install hostpanel-nodejs-1.0.0.zip.
+3. Verify the package appears in HostPanel installed packages.
+4. Verify /app/nodejs loads.
+5. Verify /cpanelapi/nodejs/runtime reports Node 18, 20, 22, and 24.
+6. Open Add Application.
+7. Confirm target domain dropdown lists eligible main domains and subdomains.
+8. Confirm cpanel.* and ftp.* domains are excluded.
+9. Select a domain and verify application root auto-fills from its document root.
+10. Select Node version 22.
+11. Select a free port in 31000-31999.
+12. Upload or prepare production app files and dependencies under the selected app root.
+13. Provision an app with entrypoint server.js.
+14. Verify the app DB row exists in nodejs_apps.
+15. Verify env vars are stored in nodejs_app_env.
+16. Verify systemd service hostpanel-nodejs-<app_id>.service exists.
+17. Verify the app starts and reports running.
+18. Verify nginx vhost points to 127.0.0.1:<port> on port 80.
+19. With SSL already provisioned, verify nginx vhost includes port 443 and existing certificate paths.
+20. Open Logs and verify journald output is visible.
+21. Edit runtime, port, env, and domain.
+22. Verify systemd and nginx configs are regenerated.
+23. Delete the app.
+24. Verify service and Node-owned nginx config are removed.
+25. Verify application files are preserved.
+26. Verify audit log entries exist for create, update, start, stop, restart, nginx write, and delete.
