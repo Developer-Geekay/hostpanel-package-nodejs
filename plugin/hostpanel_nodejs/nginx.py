@@ -5,7 +5,7 @@ import subprocess
 
 from fastapi import HTTPException
 
-from hostpanel_nodejs.validators import cert_exists, validate_domain_name
+from hostpanel_nodejs.validators import _find_cert_paths, cert_exists, validate_domain_name
 
 
 NGINX_BIN = "/opt/hostpanel/plugins/nginx/nginx"
@@ -37,7 +37,8 @@ def _vhost_path(domain: str) -> str:
 def write_proxy(app: dict) -> bool:
     domain = validate_domain_name(app["domain"])
     port = int(app["port"])
-    ssl = cert_exists(domain)
+    cert_path, key_path = _find_cert_paths(domain)
+    ssl = bool(cert_path)
     if ssl:
         content = f"""# Managed by hostpanel-nodejs for app {app['id']}
 server {{
@@ -50,8 +51,8 @@ server {{
     listen 443 ssl;
     server_name {domain};
 
-    ssl_certificate     /etc/letsencrypt/live/{domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{domain}/privkey.pem;
+    ssl_certificate     {cert_path};
+    ssl_certificate_key {key_path};
 
     location / {{
         proxy_pass http://127.0.0.1:{port};

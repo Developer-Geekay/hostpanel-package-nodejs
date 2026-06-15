@@ -176,7 +176,26 @@ def validate_command(command: str, field: str) -> str:
     return value
 
 
+def _find_cert_paths(domain: str) -> tuple[str, str]:
+    """Return (cert_path, key_path) checking all known HostPanel cert locations."""
+    try:
+        from modules.ssl.db import get_cert
+        cert = get_cert(domain)
+        if cert and cert.get("cert_path") and os.path.exists(cert["cert_path"]):
+            key = cert["cert_path"].replace("fullchain.pem", "privkey.pem")
+            return cert["cert_path"], key
+    except Exception:
+        pass
+    for base in (
+        f"/opt/hostpanel/custom-certs/{domain}",
+        f"/opt/hostpanel/certs/live/{domain}",
+        f"/etc/letsencrypt/live/{domain}",
+    ):
+        if os.path.exists(f"{base}/fullchain.pem") and os.path.exists(f"{base}/privkey.pem"):
+            return f"{base}/fullchain.pem", f"{base}/privkey.pem"
+    return "", ""
+
+
 def cert_exists(domain: str) -> bool:
-    cert = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
-    key = f"/etc/letsencrypt/live/{domain}/privkey.pem"
-    return os.path.exists(cert) and os.path.exists(key)
+    cert_path, _ = _find_cert_paths(domain)
+    return bool(cert_path)

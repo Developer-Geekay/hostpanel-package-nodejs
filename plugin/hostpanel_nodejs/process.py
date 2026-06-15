@@ -70,9 +70,12 @@ def runtime_versions() -> dict[str, str]:
     return data
 
 
+HP_CHOWN = "/opt/hostpanel/bin/hp-chown"
+
+
 def ensure_app_directory(app: dict) -> None:
     _sudo(["mkdir", "-p", app["app_root"]], check=True)
-    _sudo(["chown", "-R", f"{app['username']}:{app['username']}", app["app_root"]], check=False)
+    _sudo([HP_CHOWN, f"{app['username']}:{app['app_root']}"], check=False)
 
 
 def write_service(app: dict) -> None:

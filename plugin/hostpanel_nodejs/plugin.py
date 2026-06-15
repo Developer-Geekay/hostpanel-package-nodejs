@@ -24,13 +24,6 @@ PLUGIN_MANIFEST = {
             "size": "sm",
         },
     ],
-    "service": {
-        "name": "nodejs",
-        "unit": "hostpanel-nodejs",
-        "label": "Node.js Apps",
-        "icon": "terminal",
-        "can_reload": False,
-    },
 }
 
 
