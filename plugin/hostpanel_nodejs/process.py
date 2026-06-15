@@ -15,12 +15,8 @@ PLUGIN_DIR = "/opt/hostpanel/plugins/nodejs"
 COMMAND_TIMEOUT = 120
 
 
-def runtime_dir(version: str) -> str:
-    return f"{PLUGIN_DIR}/bin"
-
-
 def node_bin(version: str) -> str:
-    return f"{runtime_dir(version)}/node-{version}"
+    return f"{PLUGIN_DIR}/node-{version}"
 
 
 def service_name(app_id: str) -> str:
@@ -83,7 +79,7 @@ def write_service(app: dict) -> None:
     env_lines = [
         f"Environment=PORT={int(app['port'])}",
         "Environment=NODE_ENV=production",
-        f"Environment=PATH={runtime_dir(app['node_version'])}:/usr/local/bin:/usr/bin:/bin",
+        f"Environment=PATH={PLUGIN_DIR}:/usr/local/bin:/usr/bin:/bin",
     ]
     for key, value in (app.get("env") or {}).items():
         escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
