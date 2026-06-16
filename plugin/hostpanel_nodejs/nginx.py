@@ -102,12 +102,73 @@ def _read_existing(domain: str) -> str:
         return handle.read()
 
 
-def remove_proxy(domain: str) -> None:
+def remove_proxy(app: dict) -> None:
+    domain = validate_domain_name(app["domain"])
     existing = _read_existing(domain)
-    if existing and "Managed by hostpanel-nodejs" in existing:
-        _sudo(["rm", "-f", _vhost_path(domain)], check=False)
-        validate_config()
-        reload()
+    if not (existing and "Managed by hostpanel-nodejs" in existing):
+        return
+    linux_user = app["username"]
+    doc_root = f"/home/{linux_user}/public_html"
+    cert_path, key_path = _find_cert_paths(domain)
+    log_dir = "/opt/hostpanel/plugins/nginx/logs"
+    if cert_path:
+        content = f"""# Restored by hostpanel-nodejs after app removal
+server {{
+    listen 80;
+    server_name {domain} www.{domain};
+
+    location ^~ /.well-known/acme-challenge/ {{
+        root {doc_root};
+        default_type "text/plain";
+        try_files $uri =404;
+    }}
+
+    location / {{
+        return 301 https://$host$request_uri;
+    }}
+}}
+
+server {{
+    listen 443 ssl;
+    server_name {domain} www.{domain};
+    root {doc_root};
+    index index.php index.html index.htm;
+
+    ssl_certificate     {cert_path};
+    ssl_certificate_key {key_path};
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    access_log {log_dir}/{domain}.access.log;
+    error_log  {log_dir}/{domain}.error.log;
+
+    location / {{
+        try_files $uri $uri/ /index.html;
+    }}
+}}
+"""
+    else:
+        content = f"""# Restored by hostpanel-nodejs after app removal
+server {{
+    listen 80;
+    server_name {domain} www.{domain};
+    root {doc_root};
+    index index.php index.html index.htm;
+
+    access_log {log_dir}/{domain}.access.log;
+    error_log  {log_dir}/{domain}.error.log;
+
+    location / {{
+        try_files $uri $uri/ /index.html;
+    }}
+}}
+"""
+    _sudo(["tee", _vhost_path(domain)], input_data=content, check=True)
+    validate_config()
+    reload()
 
 
 def validate_config() -> None:
