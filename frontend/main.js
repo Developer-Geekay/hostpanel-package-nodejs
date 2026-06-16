@@ -219,6 +219,7 @@ ${loading ? 'Loading...' : (logs.map(row => `${row.created_at || ''} ${row.level
     const [editTarget, setEditTarget] = useState(null);
     const [deleteTarget, setDeleteTarget] = useState(null);
     const [logsTarget, setLogsTarget] = useState(null);
+    const [busyAppId, setBusyAppId] = useState(null);
 
     const load = useCallback(() => {
       setLoading(true);
@@ -256,9 +257,14 @@ ${loading ? 'Loading...' : (logs.map(row => `${row.created_at || ''} ${row.level
     };
 
     const action = async (app, name) => {
-      await sdk.fetch('POST', '/cpanelapi/nodejs/apps/' + encodeURIComponent(app.id) + '/' + name);
-      ok('Application ' + name + ' requested');
-      load();
+      setBusyAppId(app.id);
+      try {
+        await sdk.fetch('POST', '/cpanelapi/nodejs/apps/' + encodeURIComponent(app.id) + '/' + name);
+        ok('Application ' + name + ' requested');
+        load();
+      } finally {
+        setBusyAppId(null);
+      }
     };
 
     const deleteApp = async () => {
@@ -316,14 +322,19 @@ ${loading ? 'Loading...' : (logs.map(row => `${row.created_at || ''} ${row.level
                   rows=${apps}
                   loading=${loading}
                   empty=${{ title: 'No Node.js applications', desc: 'Provision an application for an existing domain or subdomain.' }}
-                  renderActions=${row => html`
-                    <button class="btn btn-ghost btn-sm" onClick=${() => action(row, 'start')}>Start</button>
-                    <button class="btn btn-ghost btn-sm" onClick=${() => action(row, 'stop')}>Stop</button>
-                    <button class="btn btn-ghost btn-sm" onClick=${() => action(row, 'restart')}>Restart</button>
-                    <button class="btn btn-ghost btn-sm" onClick=${() => setLogsTarget(row)}>Logs</button>
-                    <button class="btn btn-ghost btn-sm" onClick=${() => setEditTarget(row)}>Edit</button>
-                    <button class="btn btn-danger btn-sm" onClick=${() => setDeleteTarget(row)}>Delete</button>
-                  `}
+                  renderActions=${row => {
+                    const busy = busyAppId === row.id;
+                    const isRunning = row.status === 'running';
+                    const isStopped = row.status === 'stopped';
+                    return html`
+                      <button class="btn btn-ghost btn-sm" onClick=${() => action(row, 'start')} disabled=${busy || isRunning}>Start</button>
+                      <button class="btn btn-ghost btn-sm" onClick=${() => action(row, 'stop')} disabled=${busy || isStopped}>Stop</button>
+                      <button class="btn btn-ghost btn-sm" onClick=${() => action(row, 'restart')} disabled=${busy || isStopped}>Restart</button>
+                      <button class="btn btn-ghost btn-sm" onClick=${() => setLogsTarget(row)} disabled=${busy}>Logs</button>
+                      <button class="btn btn-ghost btn-sm" onClick=${() => setEditTarget(row)} disabled=${busy}>Edit</button>
+                      <button class="btn btn-danger btn-sm" onClick=${() => setDeleteTarget(row)} disabled=${busy}>Delete</button>
+                    `;
+                  }}
                 />
               `
           }
