@@ -134,8 +134,8 @@ async def create_app(request: NodeAppCreateRequest, current_user: User = Depends
         audit.log_action(current_user, "nodejs.nginx_proxy_write", app["id"], {"domain": app["domain"], "ssl": ssl_enabled})
         return app
     except Exception as exc:
-        store.update_app(app["id"], {"status": "failed"})
-        store.add_log(app["id"], "error", str(exc))
+        process.remove_service(app["id"])
+        store.delete_app(app["id"])
         audit.log_action(current_user, "nodejs.app_create", app["id"], {"error": str(exc)}, status="failed")
         raise
 

@@ -86,7 +86,7 @@ server {{
 """
     _sudo(["mkdir", "-p", VHOSTS_DIR], check=True)
     existing = _read_existing(domain)
-    if existing and "Managed by hostpanel-nodejs" not in existing:
+    if existing and "hostpanel-nodejs" not in existing:
         raise HTTPException(status_code=409, detail="A non-Node nginx vhost already exists for this domain")
     _sudo(["tee", _vhost_path(domain)], input_data=content, check=True)
     validate_config()

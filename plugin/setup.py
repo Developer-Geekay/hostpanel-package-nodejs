@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="hostpanel-nodejs",
-    version="1.0.3",
+    version="1.0.4",
     packages=find_packages(),
     install_requires=["fastapi", "pydantic"],
     entry_points={
