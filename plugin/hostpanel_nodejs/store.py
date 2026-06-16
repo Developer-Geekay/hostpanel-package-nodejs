@@ -73,6 +73,13 @@ def get_app(app_id: str) -> Optional[dict[str, Any]]:
     return _row_to_app(row) if row else None
 
 
+def get_app_by_domain(domain: str) -> Optional[dict[str, Any]]:
+    migrate()
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM nodejs_apps WHERE domain=?", (domain,)).fetchone()
+    return _row_to_app(row) if row else None
+
+
 def port_owner(port: int) -> Optional[str]:
     migrate()
     with get_conn() as conn:

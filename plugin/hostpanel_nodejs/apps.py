@@ -129,7 +129,7 @@ async def create_app(request: NodeAppCreateRequest, current_user: User = Depends
         process.ensure_app_directory(app)
         process.write_service(app)
         process.start(app["id"])
-        ssl_enabled = nginx.write_proxy(app)
+        ssl_enabled = nginx.sync_vhost(app["domain"], app["username"])
         app = store.update_app(app["id"], {"status": "running", "ssl_enabled": ssl_enabled})
         audit.log_action(current_user, "nodejs.nginx_proxy_write", app["id"], {"domain": app["domain"], "ssl": ssl_enabled})
         return app
@@ -172,8 +172,8 @@ async def update_app(app_id: str, request: NodeAppUpdateRequest, current_user: U
     updated = store.update_app(app_id, patch, env=env)
     process.write_service(updated)
     if existing["domain"] != updated["domain"]:
-        nginx.remove_proxy(existing)
-    ssl_enabled = nginx.write_proxy(updated)
+        nginx.sync_vhost(existing["domain"], existing["username"])
+    ssl_enabled = nginx.sync_vhost(updated["domain"], updated["username"])
     updated = store.update_app(app_id, {"ssl_enabled": ssl_enabled})
     process.restart(app_id)
     audit.log_action(current_user, "nodejs.app_update", app_id, {"domain": updated["domain"], "port": updated["port"]})
@@ -188,8 +188,8 @@ async def delete_app(app_id: str, current_user: User = Depends(get_current_user)
         raise HTTPException(status_code=404, detail="Application not found")
     _ensure_app_access(app, current_user)
     process.remove_service(app_id)
-    nginx.remove_proxy(app)
     store.delete_app(app_id)
+    nginx.sync_vhost(app["domain"], app["username"])
     audit.log_action(current_user, "nodejs.app_delete", app_id, {"domain": app["domain"], "files_preserved": True})
     return {"status": "success", "message": "Application deleted; files preserved"}
 
