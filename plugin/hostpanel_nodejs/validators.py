@@ -177,22 +177,34 @@ def validate_command(command: str, field: str) -> str:
 
 
 def _find_cert_paths(domain: str) -> tuple[str, str]:
-    """Return (cert_path, key_path) checking all known HostPanel cert locations."""
+    """Return (cert_path, key_path) checking all known HostPanel cert locations.
+
+    For subdomains, falls back to the parent domain cert when no dedicated cert
+    exists — parent certs issued by HostPanel include subdomains as SANs.
+    """
+    candidates = [domain]
+    parts = domain.split(".")
+    if len(parts) > 2:
+        candidates.append(".".join(parts[-2:]))
+
     try:
         from modules.ssl.db import get_cert
-        cert = get_cert(domain)
-        if cert and cert.get("cert_path") and os.path.exists(cert["cert_path"]):
-            key = cert["cert_path"].replace("fullchain.pem", "privkey.pem")
-            return cert["cert_path"], key
+        for candidate in candidates:
+            cert = get_cert(candidate)
+            if cert and cert.get("cert_path") and os.path.exists(cert["cert_path"]):
+                key = cert["cert_path"].replace("fullchain.pem", "privkey.pem")
+                return cert["cert_path"], key
     except Exception:
         pass
-    for base in (
-        f"/opt/hostpanel/custom-certs/{domain}",
-        f"/opt/hostpanel/certs/live/{domain}",
-        f"/etc/letsencrypt/live/{domain}",
-    ):
-        if os.path.exists(f"{base}/fullchain.pem") and os.path.exists(f"{base}/privkey.pem"):
-            return f"{base}/fullchain.pem", f"{base}/privkey.pem"
+
+    for candidate in candidates:
+        for base in (
+            f"/opt/hostpanel/custom-certs/{candidate}",
+            f"/opt/hostpanel/certs/live/{candidate}",
+            f"/etc/letsencrypt/live/{candidate}",
+        ):
+            if os.path.exists(f"{base}/fullchain.pem") and os.path.exists(f"{base}/privkey.pem"):
+                return f"{base}/fullchain.pem", f"{base}/privkey.pem"
     return "", ""
 
 
