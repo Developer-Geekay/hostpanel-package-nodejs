@@ -226,6 +226,12 @@ async def restart_app(app_id: str, current_user: User = Depends(get_current_user
     return store.get_app(app["id"])
 
 
+@router.get("/apps/{app_id}/metrics")
+async def app_metrics(app_id: str, current_user: User = Depends(get_current_user)):
+    app = await get_app(app_id, current_user)
+    return process.metrics(app["id"])
+
+
 @router.get("/apps/{app_id}/logs")
 async def get_logs(app_id: str, current_user: User = Depends(get_current_user)):
     app = await get_app(app_id, current_user)

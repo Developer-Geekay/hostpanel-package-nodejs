@@ -139,3 +139,50 @@ def status(app_id: str) -> str:
     result = _sudo(["systemctl", "is-active", service_name(app_id)], check=False, timeout=10)
     return "running" if result.returncode == 0 else "stopped"
 
+
+def metrics(app_id: str) -> dict:
+    """Live memory / uptime / restart-count for the app's systemd service.
+
+    No CPU — per-app CPU can't be sampled reliably here. Values are None when the
+    service isn't active so the UI can show a clean placeholder.
+    """
+    unit = service_name(app_id)
+    result = _sudo(
+        ["systemctl", "show", unit,
+         "-p", "ActiveState", "-p", "MemoryCurrent",
+         "-p", "ActiveEnterTimestampMonotonic", "-p", "NRestarts"],
+        check=False, timeout=10,
+    )
+    data: dict[str, str] = {}
+    for line in (result.stdout or "").splitlines():
+        key, _, val = line.partition("=")
+        if key:
+            data[key] = val
+
+    active = data.get("ActiveState") == "active"
+
+    mem = data.get("MemoryCurrent", "")
+    memory_bytes = int(mem) if mem.isdigit() else None
+    # systemd reports a huge sentinel when unset
+    if memory_bytes is not None and memory_bytes > (1 << 62):
+        memory_bytes = None
+
+    uptime_seconds = None
+    mono = data.get("ActiveEnterTimestampMonotonic", "")
+    if active and mono.isdigit():
+        try:
+            with open("/proc/uptime") as f:
+                boot_uptime = float(f.read().split()[0])
+            uptime_seconds = max(0, int(boot_uptime - int(mono) / 1_000_000))
+        except Exception:
+            uptime_seconds = None
+
+    restarts = int(data["NRestarts"]) if data.get("NRestarts", "").isdigit() else 0
+
+    return {
+        "active": active,
+        "memory_bytes": memory_bytes if active else None,
+        "uptime_seconds": uptime_seconds,
+        "restarts": restarts,
+    }
+

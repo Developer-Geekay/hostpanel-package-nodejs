@@ -40,6 +40,25 @@
     return env;
   }
 
+  function formatBytes(n) {
+    if (n == null) return '—';
+    const mb = n / (1024 * 1024);
+    if (mb < 1) return (n / 1024).toFixed(0) + ' KB';
+    if (mb < 1024) return mb.toFixed(1) + ' MB';
+    return (mb / 1024).toFixed(2) + ' GB';
+  }
+
+  function formatUptime(s) {
+    if (s == null) return '—';
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m`;
+    return `${s}s`;
+  }
+
   // ── Node.js Plugin Component ──────────────────────────────────────────────────
 
   function NodeJsPlugin() {
@@ -60,6 +79,7 @@
     // Logs state
     const [logs, setLogs] = useState([]);
     const [logsLoading, setLogsLoading] = useState(false);
+    const [metrics, setMetrics] = useState(null);
 
     // Edit/Create form state
     const [formName, setFormName] = useState('');
@@ -116,6 +136,23 @@
         setLogsLoading(false);
       }
     }, [toastErr]);
+
+    // Live metrics (memory / uptime / restarts) — polled while on the Control tab
+    const fetchMetrics = useCallback(async (appId) => {
+      try {
+        const data = await sdk.fetch('GET', '/cpanelapi/nodejs/apps/' + encodeURIComponent(appId) + '/metrics');
+        setMetrics(data);
+      } catch (e) {
+        setMetrics(null);
+      }
+    }, []);
+
+    useEffect(() => {
+      if (!selectedAppId || activeTab !== 'control') { setMetrics(null); return; }
+      fetchMetrics(selectedAppId);
+      const iv = setInterval(() => fetchMetrics(selectedAppId), 5000);
+      return () => clearInterval(iv);
+    }, [selectedAppId, activeTab, fetchMetrics]);
 
     // Handle Active Tab Change
     const handleTabChange = (tabId) => {
@@ -507,17 +544,23 @@
                   </div>
                   <div style=${{ display: 'flex', gap: 6 }}>
                     <button class="btn btn-outline btn-sm" onClick=${() => handleTabChange('logs')}>📋 Logs</button>
+                    ${activeApp.status === 'running'
+                      ? html`<button
+                          class="btn btn-danger btn-sm"
+                          disabled=${busyAppId === activeApp.id}
+                          onClick=${() => handlePowerAction(activeApp, 'stop')}
+                        >⏹ Stop</button>`
+                      : html`<button
+                          class="btn btn-outline btn-sm"
+                          disabled=${busyAppId === activeApp.id}
+                          onClick=${() => handlePowerAction(activeApp, 'start')}
+                        >▶ Start</button>`}
                     <button
                       class="btn btn-outline btn-sm"
                       style=${{ color: 'var(--amber)', borderColor: 'var(--amber-border, #f59e0b)' }}
-                      disabled=${busyAppId === activeApp.id}
+                      disabled=${busyAppId === activeApp.id || activeApp.status === 'stopped'}
                       onClick=${() => handlePowerAction(activeApp, 'restart')}
                     >↺ Restart</button>
-                    <button
-                      class="btn btn-danger btn-sm"
-                      disabled=${busyAppId === activeApp.id || activeApp.status === 'stopped'}
-                      onClick=${() => handlePowerAction(activeApp, 'stop')}
-                    >⏹ Stop</button>
                   </div>
                 </div>
 
@@ -535,87 +578,42 @@
                   ${activeTab === 'control' && html`
                     <div class="animate-fade-in" style=${{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                       
-                      <!-- Stat Cards Row (4 cols like design) -->
-                      <div style=${{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-                        <div class="stat-card">
-                          <div class="stat-label">CPU</div>
-                          <div class="stat-value">${activeApp.cpu != null ? activeApp.cpu + '%' : '—'}</div>
-                          <div class="stat-sub">current</div>
-                        </div>
+                      <!-- Live metrics: Memory / Uptime / Restarts (no CPU — not per-app measurable) -->
+                      <div style=${{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
                         <div class="stat-card">
                           <div class="stat-label">Memory</div>
-                          <div class="stat-value">${activeApp.memory_mb != null ? activeApp.memory_mb + ' MB' : '—'}</div>
+                          <div class="stat-value">${metrics && metrics.memory_bytes != null ? formatBytes(metrics.memory_bytes) : '—'}</div>
                           <div class="stat-sub">resident</div>
                         </div>
                         <div class="stat-card">
                           <div class="stat-label">Uptime</div>
-                          <div class="stat-value">${activeApp.uptime || '—'}</div>
-                          <div class="stat-sub">restarts: ${activeApp.restarts ?? '—'}</div>
+                          <div class="stat-value">${metrics && metrics.uptime_seconds != null ? formatUptime(metrics.uptime_seconds) : '—'}</div>
+                          <div class="stat-sub">${activeApp.status === 'running' ? 'since last start' : 'stopped'}</div>
                         </div>
                         <div class="stat-card">
-                          <div class="stat-label">Port</div>
-                          <div class="stat-value" style=${{ fontFamily: 'var(--font-mono)' }}>:${activeApp.port}</div>
-                          <div class="stat-sub">node v${activeApp.node_version}</div>
+                          <div class="stat-label">Restarts</div>
+                          <div class="stat-value">${metrics && metrics.restarts != null ? metrics.restarts : '—'}</div>
+                          <div class="stat-sub">since boot</div>
                         </div>
                       </div>
 
-                      <!-- Process Config + Runtime Info (2-col cards) -->
-                      <div style=${{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                        <div class="card" style=${{ padding: 16 }}>
-                          <div style=${{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 12 }}>⚙ Process Config</div>
-                          <div style=${{ display: 'grid', gap: 8 }}>
-                            ${[
-                              ['Script', activeApp.entrypoint],
-                              ['Port', ':' + activeApp.port],
-                              ['Auto-restart', 'enabled'],
-                              ['Node version', 'v' + activeApp.node_version],
-                            ].map(([k, v]) => html`
-                              <div key=${k} style=${{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                                <span style=${{ fontSize: 12, color: 'var(--text-3)' }}>${k}</span>
-                                <span class="mono" style=${{ fontSize: 12, color: 'var(--text-2)' }}>${v}</span>
-                              </div>`)}
-                          </div>
-                        </div>
-                        <div class="card" style=${{ padding: 16 }}>
-                          <div style=${{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 12 }}>⬡ Runtime Info</div>
-                          <div style=${{ display: 'grid', gap: 8 }}>
-                            ${[
-                              ['App Root', activeApp.app_root || activeApp.directory || '—'],
-                              ['Domain', activeApp.domain || '—'],
-                              ['Owner', activeApp.username || '—'],
-                              ['Status', activeApp.status],
-                            ].map(([k, v]) => html`
-                              <div key=${k} style=${{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                                <span style=${{ fontSize: 12, color: 'var(--text-3)' }}>${k}</span>
-                                <span style=${{ fontSize: 12, color: 'var(--text-2)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>${v}</span>
-                              </div>`)}
-                          </div>
-                        </div>
-                      </div>
-
-                      <!-- Actions Card -->
+                      <!-- Single consolidated info panel (no duplication with header/metrics) -->
                       <div class="card" style=${{ padding: 16 }}>
-                        <div style=${{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 12 }}>Actions</div>
-                        <div style=${{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                          <button
-                            class="btn btn-outline btn-sm"
-                            disabled=${busyAppId === activeApp.id || activeApp.status === 'running'}
-                            onClick=${() => handlePowerAction(activeApp, 'start')}
-                          >▶ Start</button>
-                          <button
-                            class="btn btn-outline btn-sm"
-                            disabled=${busyAppId === activeApp.id || activeApp.status === 'stopped'}
-                            onClick=${() => handlePowerAction(activeApp, 'stop')}
-                          >⏹ Stop</button>
-                          <button
-                            class="btn btn-outline btn-sm"
-                            disabled=${busyAppId === activeApp.id || activeApp.status === 'stopped'}
-                            onClick=${() => handlePowerAction(activeApp, 'restart')}
-                          >↺ Restart</button>
-                          <button
-                            class="btn btn-danger btn-sm"
-                            onClick=${() => setDeleteTarget(activeApp)}
-                          >🗑 Delete</button>
+                        <div style=${{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 12 }}>⚙ Configuration</div>
+                        <div style=${{ display: 'grid', gap: 8 }}>
+                          ${[
+                            ['Domain', activeApp.domain || '—'],
+                            ['Owner', activeApp.username || '—'],
+                            ['App Root', activeApp.app_root || activeApp.directory || '—'],
+                            ['Script', activeApp.entrypoint || '—'],
+                            ['Port', ':' + activeApp.port],
+                            ['Node version', 'v' + activeApp.node_version],
+                            ['Auto-restart', 'enabled'],
+                          ].map(([k, v]) => html`
+                            <div key=${k} style=${{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                              <span style=${{ fontSize: 12, color: 'var(--text-3)', flexShrink: 0 }}>${k}</span>
+                              <span class="mono" style=${{ fontSize: 12, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>${v}</span>
+                            </div>`)}
                         </div>
                       </div>
                     </div>
