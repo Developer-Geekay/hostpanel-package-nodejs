@@ -53,7 +53,7 @@ def _sudo(command: list[str], check: bool = False, input_data: Optional[str] = N
 
 def runtime_versions() -> dict[str, str]:
     data: dict[str, str] = {}
-    for version in ("18", "20", "22", "24"):
+    for version in ("22", "24"):
         binary = node_bin(version)
         if os.path.exists(binary):
             try:

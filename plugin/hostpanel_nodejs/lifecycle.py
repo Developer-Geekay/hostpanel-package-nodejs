@@ -26,7 +26,7 @@ def _runtime_ready(version: str) -> bool:
 def on_install():
     logger.info("Node.js on_install: initializing runtime state")
     store.migrate()
-    missing = [version for version in ("18", "20", "22", "24") if not _runtime_ready(version)]
+    missing = [version for version in ("22", "24") if not _runtime_ready(version)]
     if missing:
         logger.warning("Node.js runtime missing or not executable: %s", ", ".join(missing))
     _sudo(["systemctl", "daemon-reload"], check=False)

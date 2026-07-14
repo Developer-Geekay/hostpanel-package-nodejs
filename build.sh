@@ -16,7 +16,7 @@ ZIP="hostpanel-nodejs-${VERSION}.zip"
 
 mkdir -p bin
 
-for version in 18 20 22 24
+for version in 22 24
 do
   archive="sources/node-${version}-linux-arm64.tar.xz"
   if [ ! -f "$archive" ]; then
@@ -28,8 +28,6 @@ do
 done
 
 for path in \
-  bin/node-18 \
-  bin/node-20 \
   bin/node-22 \
   bin/node-24
 do

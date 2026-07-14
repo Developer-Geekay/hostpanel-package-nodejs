@@ -13,7 +13,7 @@ from domain_registry import _load_domains, _load_subdomains
 from hostpanel_nodejs import store
 
 
-NODE_VERSIONS = {"18", "20", "22", "24"}
+NODE_VERSIONS = {"22", "24"}
 PORT_MIN = 31000
 PORT_MAX = 31999
 APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
