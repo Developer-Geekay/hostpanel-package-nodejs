@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +11,7 @@ from deps import get_current_user
 
 from hostpanel_nodejs import audit, logs, nginx, process, store, validators
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/cpanelapi/nodejs", tags=["Node.js"])
 
@@ -214,6 +216,12 @@ async def stop_app(app_id: str, current_user: User = Depends(get_current_user)):
 async def restart_app(app_id: str, current_user: User = Depends(get_current_user)):
     app = await get_app(app_id, current_user)
     process.restart(app["id"])
+    # Re-assert the proxy vhost so Restart also repairs a clobbered/static vhost
+    # (matches what users expect "Restart" to fix).
+    try:
+        nginx.sync_vhost(app["domain"], app["username"])
+    except Exception as exc:
+        logger.warning("vhost re-sync on restart failed for %s: %s", app.get("domain"), exc)
     audit.log_action(current_user, "nodejs.app_restart", app_id, {"domain": app["domain"]})
     return store.get_app(app["id"])
 

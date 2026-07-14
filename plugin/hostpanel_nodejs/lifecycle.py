@@ -41,6 +41,14 @@ def on_startup():
                 process.write_service(app)
             state = process.status(app["id"])
             store.update_app(app["id"], {"status": state})
+            # Re-assert the nginx proxy vhost. The nginx package's on_startup can
+            # regenerate a static vhost from the domain registry (which stores no
+            # proxy_pass), clobbering the proxy and 403-ing the app. Re-syncing
+            # here self-heals it on every restart.
+            try:
+                nginx.sync_vhost(app["domain"], app["username"])
+            except Exception as ve:
+                logger.warning("Node.js vhost re-sync failed for %s: %s", app.get("domain"), ve)
         except Exception as exc:
             logger.warning("Node.js app repair failed for %s: %s", app.get("id"), exc)
             store.update_app(app["id"], {"status": "failed"})
