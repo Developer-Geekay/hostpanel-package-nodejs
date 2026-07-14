@@ -145,7 +145,10 @@ def validate_port(port: int, current_app_id: Optional[str] = None) -> int:
     owner = store.port_owner(value)
     if owner and owner != current_app_id:
         raise HTTPException(status_code=409, detail=f"Port {value} is already assigned")
-    if _port_listening(value):
+    # Only probe the live socket for a port this app doesn't already own — otherwise
+    # the app's own running process makes its unchanged port look "in use" and blocks
+    # every config save.
+    if owner != current_app_id and _port_listening(value):
         raise HTTPException(status_code=409, detail=f"Port {value} is already in use")
     return value
 
