@@ -462,7 +462,7 @@
                     <div class="field">
                       <label>Node Version</label>
                       <select value=${formNodeVersion} onChange=${e => setFormNodeVersion(e.target.value)}>
-                        ${['18', '20', '22', '24'].map(v => html`
+                        ${['22', '24'].map(v => html`
                           <option value=${v}>Node ${v}</option>
                         `)}
                       </select>
@@ -628,7 +628,7 @@
                       <div class="field">
                         <label>Node Version</label>
                         <select value=${formNodeVersion} onChange=${e => setFormNodeVersion(e.target.value)}>
-                          ${['18', '20', '22', '24'].map(v => html`
+                          ${['22', '24'].map(v => html`
                             <option value=${v}>Node ${v}</option>
                           `)}
                         </select>
