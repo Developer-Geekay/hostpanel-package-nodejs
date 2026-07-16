@@ -56,8 +56,16 @@ the existing ownership rules):
 │   └── 3b8d04/
 ├── current -> releases/9f2a1c    # atomic symlink; the deploy pointer
 ├── previous -> releases/3b8d04   # one-command rollback
-├── shared/                       # persistent data, symlinked into each release
-└── artifacts/                    # retained tarballs, pruned with releases (0700)
+└── shared/                       # persistent data, symlinked into each release
+```
+
+Retained tarballs live centrally in the plugin dir, not in user homes — the panel user owns
+them (no sudo needed to write) and Phase 5 pruning stays a plain directory walk:
+
+```
+/opt/hostpanel/plugins/nodejs/
+├── staging/                      # extraction scratch; helper-validated source for install-release
+└── artifacts/<app_id>/<sha>.tar.gz
 ```
 
 For deploy-enabled apps the generated unit's `WorkingDirectory` points at

@@ -7,7 +7,7 @@
 # <app_root>/{releases,current,previous} with validated arguments.
 #
 # Exit codes: 0 ok, 10 release/link missing, 11 manifest missing,
-#             12 validation error.
+#             12 validation error, 13 release already exists.
 
 die() { echo "hp-nodejs-deploy: $1" >&2; exit "${2:-12}"; }
 
@@ -59,6 +59,34 @@ case "$cmd" in
     ;;
   list-releases)
     if [ -d "$releases" ]; then ls -1 "$releases"; fi
+    exit 0
+    ;;
+  install-release)
+    # install-release <app_root> <sha> <staged_dir> <owner>
+    # Moves an extracted release from the plugin staging area into
+    # releases/<sha> and hands ownership to the app's user. Releases are
+    # immutable: an existing target is refused, never replaced.
+    check_sha "$3"
+    src="$4"
+    owner="$5"
+    echo "$owner" | grep -Eq '^[a-z_][a-z0-9_-]*$' || die "invalid owner"
+    case "$src" in
+      /opt/hostpanel/plugins/nodejs/staging/*) ;;
+      *) die "source must be under the plugin staging directory" ;;
+    esac
+    case "$src" in
+      *..*) die "source must not contain .." ;;
+    esac
+    [ -d "$src" ] || die "source directory does not exist"
+    srcreal="$(realpath "$src")" || die "cannot resolve source"
+    case "$srcreal" in
+      /opt/hostpanel/plugins/nodejs/staging/*) ;;
+      *) die "source resolves outside staging" ;;
+    esac
+    if [ -e "$releases/$3" ]; then exit 13; fi
+    mkdir -p "$releases"
+    mv -T "$srcreal" "$releases/$3" || die "move into releases failed" 1
+    chown -R "$owner:$owner" "$releases/$3" || die "chown failed" 1
     exit 0
     ;;
   activate)
