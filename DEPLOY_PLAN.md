@@ -209,16 +209,23 @@ Branch: `feat/deploy-phase-2-ingest`
 Acceptance: `curl` deploy of portfolio end-to-end; every rejection case verified; `htop` shows
 no sustained CPU during deploy; existing apps untouched.
 
-### Phase 3 — `deploy-actions` reusable workflow
+### Phase 3 — Reusable GitHub Actions workflow
 
-Branch: `feat/deploy-phase-3-workflow` in `Developer-Geekay/deploy-actions` (new repo)
+Branch: `feat/deploy-phase-3-workflow` — **hosted in this repo** at
+`.github/workflows/node-deploy.yml`, not a separate `deploy-actions` repo (operator decision,
+2026-07-17: one less repo; the workflow evolves in the same PRs as the endpoint it talks to;
+consumers pin `@main` since this repo's version tags belong to package releases; extract to its
+own repo later only if non-HostPanel consumers appear).
 
 1. `on: workflow_call` — inputs: `app_id` (required), `node_version` (default 22 — the package
-   only ships 22/24 today), `build_cmd`, `artifact_path`, `entrypoint`, `health`.
-   Secrets (interim): `DEPLOY_URL`, `DEPLOY_TOKEN`.
-2. Steps: checkout → setup-node + cache → `npm ci` → `npm test` → build → generate
-   `manifest.json` from inputs + `github.sha` → tar + sha256 → POST to the Phase 2 endpoint.
-3. ~8-line consumer snippet in the portfolio repo; tag `v1`.
+   only ships 22/24 today), `install_cmd`/`test_cmd`/`build_cmd`, `artifact_paths`,
+   `include_prod_node_modules`, `entrypoint`, `health`. Secrets (interim): `DEPLOY_URL`,
+   `DEPLOY_TOKEN`.
+2. Steps: validate inputs → checkout → setup-node + cache → install → test → build →
+   assemble + generate `manifest.json` (via `jq`; all non-command inputs reach the shell only
+   as quoted env vars) → tar + sha256 → POST to the Phase 2 endpoint, fail on non-200.
+3. ~8-line consumer snippet in the portfolio repo calling
+   `Developer-Geekay/hostpanel-package-nodejs/.github/workflows/node-deploy.yml@main`.
 4. No Node-specific logic on the Pi side — Node-ness lives entirely in this workflow.
 
 Acceptance: push to portfolio `main` → live within ~2 min, zero Pi build load; failing tests

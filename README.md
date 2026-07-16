@@ -111,6 +111,33 @@ Landed in Phase 2 (tarball ingest):
 - One deploy per app at a time; a concurrent POST gets `409`.
 - Tarballs are retained under `/opt/hostpanel/plugins/nodejs/artifacts/<app_id>/`.
 
+Landed in Phase 3 (reusable GitHub Actions workflow):
+
+- `.github/workflows/node-deploy.yml` — `workflow_call` workflow that builds on GitHub's
+  runners and POSTs the tarball to the Phase 2 endpoint. The Pi never builds anything.
+- Consumer snippet (in the app repo, e.g. `.github/workflows/deploy.yml`):
+
+```yaml
+name: Deploy to HostPanel
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: Developer-Geekay/hostpanel-package-nodejs/.github/workflows/node-deploy.yml@main
+    with:
+      app_id: <your-app-id>
+      artifact_paths: dist server.js data package.json
+    secrets:
+      DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
+      DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+```
+
+- Repo secrets required: `DEPLOY_URL` (panel origin) and `DEPLOY_TOKEN` (minted once via
+  `POST /apps/{app_id}/deploy-token`). Both disappear in Phase 4 (OIDC).
+
 Phase 1 manual flow (until GitHub Actions takes over in Phases 2–3):
 
 1. Back up the app's unit file (`/etc/systemd/system/hostpanel-nodejs-<app_id>.service`) —
