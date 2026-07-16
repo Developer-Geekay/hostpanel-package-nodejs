@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Developer-Geekay/hostpanel-package-nodejs/manifest.schema.json",
+  "title": "hostpanel-nodejs deploy manifest",
+  "description": "Contract for manifest.json at the root of a deploy tarball. Produced by the deploy-actions workflow, validated by the deploy ingest endpoint. schema is versioned from day one; unknown versions are rejected with 400.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "app_id", "runtime", "entrypoint", "health", "commit", "built_at"],
+  "properties": {
+    "schema": {
+      "const": 1,
+      "description": "Manifest schema version. Bump on any breaking change."
+    },
+    "app_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "description": "The HostPanel nodejs app id (nodejs_apps.id). Authoritative: must equal the app_id in the request path or the deploy is rejected with 409."
+    },
+    "runtime": {
+      "type": "string",
+      "enum": ["node22", "node24"],
+      "description": "Node.js runtime the artifact was built for. Must match a runtime bundled by this package."
+    },
+    "entrypoint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Relative path of the app entry file inside the release, e.g. server.js."
+    },
+    "health": {
+      "type": "string",
+      "pattern": "^/",
+      "maxLength": 256,
+      "description": "HTTP path polled on 127.0.0.1:<app.port> after restart to decide healthy vs rollback."
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "Git commit SHA the artifact was built from. Its short form names the release directory."
+    },
+    "built_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC build timestamp set by the workflow."
+    }
+  }
+}

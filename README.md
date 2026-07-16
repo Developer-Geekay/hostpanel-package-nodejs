@@ -59,6 +59,22 @@ GET    /runtime
 GET    /count
 ```
 
+## Push Deploys (in progress)
+
+The package is gaining GitHub-push deploys: GitHub Actions builds a tarball, POSTs it to a
+package route, and the plugin extracts it, flips a `current` symlink, and restarts the app's
+unit. See `DEPLOY_PLAN.md` for the full phased plan and `manifest.schema.json` for the frozen
+tarball contract.
+
+Landed so far (Phase 0):
+
+- `manifest.schema.json` — the deploy manifest contract (schema v1).
+- `hostpanel_nodejs/ids.py` — `dep_<ULID>` deployment ids.
+- `nodejs_deployments` table and deploy columns on `nodejs_apps` (additive migration; all
+  defaults leave existing apps bit-identical — `deploy_enabled` is off).
+- `plugin/tests/` — pytest suite covering ids and the migration (run with
+  `python3 -m pytest plugin/tests`).
+
 ## Build
 
 ```bash
