@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from auth import User
 from deps import get_current_user
 
-from hostpanel_nodejs import audit, logs, nginx, process, store, validators
+from hostpanel_nodejs import audit, logs, nginx, process, releases, store, validators
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +236,85 @@ async def app_metrics(app_id: str, current_user: User = Depends(get_current_user
 async def get_logs(app_id: str, current_user: User = Depends(get_current_user)):
     app = await get_app(app_id, current_user)
     return logs.app_logs(app["id"])
+
+
+class DeployModeRequest(BaseModel):
+    enabled: bool
+
+
+class ActivateRequest(BaseModel):
+    sha: str = Field(..., min_length=7, max_length=40)
+
+
+def _ensure_admin(current_user: User) -> None:
+    if not validators.is_admin(current_user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+@router.post("/apps/{app_id}/deploy-mode")
+async def set_deploy_mode(app_id: str, request: DeployModeRequest, current_user: User = Depends(get_current_user)):
+    """Toggle push-deploy mode (admin only, interim — panel UI arrives in Phase 7).
+
+    Enabling creates the releases/ layout but leaves the running unit untouched
+    until the first activation flips WorkingDirectory to current/. Disabling
+    repoints the unit back at app_root and restarts.
+    """
+    _ensure_admin(current_user)
+    app = await get_app(app_id, current_user)
+    if request.enabled:
+        releases.ensure_layout(app)
+        updated = store.update_app(app["id"], {"deploy_enabled": True})
+        process.write_service(updated)
+    else:
+        updated = store.update_app(app["id"], {"deploy_enabled": False})
+        process.write_service(updated)
+        process.restart(app["id"])
+    audit.log_action(current_user, "nodejs.deploy_mode_set", app["id"], {"enabled": request.enabled})
+    return updated
+
+
+@router.post("/apps/{app_id}/activate")
+async def activate_release(app_id: str, request: ActivateRequest, current_user: User = Depends(get_current_user)):
+    """Activate an already-extracted release (admin only). Phase 1 manual flow;
+    the deploy ingest endpoint takes over extraction from Phase 2."""
+    _ensure_admin(current_user)
+    app = await get_app(app_id, current_user)
+    if not app.get("deploy_enabled"):
+        raise HTTPException(status_code=409, detail="Deploy mode is not enabled for this application")
+    try:
+        updated = releases.activate(app, request.sha)
+    except HTTPException as exc:
+        audit.log_action(current_user, "nodejs.release_activate", app["id"], {"sha": request.sha, "error": exc.detail}, status="failed")
+        raise
+    audit.log_action(current_user, "nodejs.release_activate", app["id"], {"sha": updated["current_sha"], "previous": updated["previous_sha"]})
+    return updated
+
+
+@router.post("/apps/{app_id}/rollback")
+async def rollback_release(app_id: str, request: Optional[ActivateRequest] = None, current_user: User = Depends(get_current_user)):
+    """Roll back to `previous` (default) or any retained SHA (admin only)."""
+    _ensure_admin(current_user)
+    app = await get_app(app_id, current_user)
+    if not app.get("deploy_enabled"):
+        raise HTTPException(status_code=409, detail="Deploy mode is not enabled for this application")
+    to_sha = request.sha if request else None
+    try:
+        updated = releases.rollback(app, to_sha)
+    except HTTPException as exc:
+        audit.log_action(current_user, "nodejs.release_rollback", app["id"], {"to_sha": to_sha, "error": exc.detail}, status="failed")
+        raise
+    audit.log_action(current_user, "nodejs.release_rollback", app["id"], {"sha": updated["current_sha"]})
+    return updated
+
+
+@router.get("/apps/{app_id}/releases")
+async def get_releases(app_id: str, current_user: User = Depends(get_current_user)):
+    app = await get_app(app_id, current_user)
+    return {
+        "current_sha": app.get("current_sha"),
+        "previous_sha": app.get("previous_sha"),
+        "releases": releases.list_releases(app) if app.get("deploy_enabled") else [],
+    }
 
 
 @router.get("/count")

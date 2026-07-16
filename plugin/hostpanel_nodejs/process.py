@@ -74,6 +74,18 @@ def ensure_app_directory(app: dict) -> None:
     _sudo([HP_CHOWN, f"{app['username']}:{app['app_root']}"], check=False)
 
 
+def working_directory(app: dict) -> str:
+    """Where the unit runs from: app_root, or app_root/current once the app is
+    in deploy mode and a release has been activated. Checked via sudo because
+    the backend may not have list permission inside user homes."""
+    if not app.get("deploy_enabled"):
+        return app["app_root"]
+    current = os.path.join(app["app_root"], "current")
+    if _sudo(["test", "-L", current], check=False, timeout=10).returncode == 0:
+        return current
+    return app["app_root"]
+
+
 def write_service(app: dict) -> None:
     app_id = validate_app_id(app["id"])
     env_lines = [
@@ -93,7 +105,7 @@ After=network.target
 [Service]
 Type=simple
 User={app['username']}
-WorkingDirectory={app['app_root']}
+WorkingDirectory={working_directory(app)}
 {chr(10).join(env_lines)}
 ExecStart=/bin/bash -lc {shlex.quote('exec ' + command)}
 Restart=on-failure

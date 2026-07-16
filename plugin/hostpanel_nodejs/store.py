@@ -182,10 +182,20 @@ def update_app(app_id: str, data: dict[str, Any], env: Optional[dict[str, str]] 
         "port",
         "status",
         "ssl_enabled",
+        "deploy_enabled",
+        "repo",
+        "ref",
+        "health_path",
+        "keep_releases",
+        "health_timeout_s",
+        "health_interval_s",
+        "current_sha",
+        "previous_sha",
+        "deploy_token_hash",
     ):
         if key in data:
             fields.append(f"{key}=?")
-            values.append(int(bool(data[key])) if key == "ssl_enabled" else data[key])
+            values.append(int(bool(data[key])) if key in ("ssl_enabled", "deploy_enabled") else data[key])
     fields.append("updated_at=?")
     values.append(utc_now())
     values.append(app_id)
