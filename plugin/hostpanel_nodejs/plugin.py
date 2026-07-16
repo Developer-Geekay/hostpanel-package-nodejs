@@ -1,4 +1,4 @@
-from hostpanel_nodejs.apps import router
+from hostpanel_nodejs.apps import ci_router, router
 
 
 PLUGIN_MANIFEST = {
@@ -28,3 +28,7 @@ PLUGIN_MANIFEST = {
 
 
 routers = [router]
+
+# Mounted by core (>= 1.1.0) without the panel-session wrapper; the deploy
+# route authenticates with per-app deploy tokens (OIDC in Phase 4).
+public_routers = [ci_router]

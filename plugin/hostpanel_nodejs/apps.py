@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/cpanelapi/nodejs", tags=["Node.js"])
 
+# Machine-to-machine routes. Core mounts this via `public_routers`, i.e.
+# WITHOUT the panel-session wrapper — every route here must do its own
+# credential check and audit rejections (deploy tokens now, OIDC in Phase 4).
+ci_router = APIRouter(prefix="/cpanelapi/nodejs", tags=["Node.js CI"])
+
 
 class EnvVar(BaseModel):
     key: str
@@ -334,7 +339,7 @@ async def list_deployments(app_id: str, current_user: User = Depends(get_current
     return store.list_deployments(app["id"])
 
 
-@router.post("/apps/{app_id}/deploy")
+@ci_router.post("/apps/{app_id}/deploy")
 def deploy_app(
     app_id: str,
     tarball: UploadFile = File(...),
