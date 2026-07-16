@@ -25,7 +25,8 @@ on:
         default: "22"
         type: string
       install_cmd:
-        default: npm ci
+        description: Override the install command. Empty = auto (npm ci with a lockfile, npm install without)
+        default: ""
         type: string
       test_cmd:
         description: Failing tests block the deploy
@@ -81,10 +82,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
-          cache: npm
+          # setup-node hard-fails on cache: npm when the repo has no lockfile.
+          cache: ${{ hashFiles('package-lock.json', 'npm-shrinkwrap.json') != '' && 'npm' || '' }}
 
       - name: Install
-        run: ${{ inputs.install_cmd }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.install_cmd }}" ]; then
+            ${{ inputs.install_cmd }}
+          elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm ci
+          else
+            echo "::warning::No lockfile found — using npm install. Commit a package-lock.json for reproducible builds and dependency caching."
+            npm install
+          fi
 
       - name: Test
         run: ${{ inputs.test_cmd }}
