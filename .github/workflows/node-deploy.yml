@@ -86,10 +86,12 @@ jobs:
           cache: ${{ hashFiles('package-lock.json', 'npm-shrinkwrap.json') != '' && 'npm' || '' }}
 
       - name: Install
+        env:
+          INSTALL_CMD: ${{ inputs.install_cmd }}
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.install_cmd }}" ]; then
-            ${{ inputs.install_cmd }}
+          if [ -n "$INSTALL_CMD" ]; then
+            eval "$INSTALL_CMD"
           elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
             npm ci
           else
