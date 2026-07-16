@@ -1,0 +1,81 @@
+#!/bin/bash
+# hp-nodejs-deploy -- root helper for the HostPanel Node.js deploy pipeline.
+#
+# Installed root-owned 0755 to /opt/hostpanel/bin by the plugin lifecycle;
+# the package sudoers grants this single fixed path instead of raw
+# ln/mv/test/readlink/ls, so root file operations are confined to
+# <app_root>/{releases,current,previous} with validated arguments.
+#
+# Exit codes: 0 ok, 10 release/link missing, 11 manifest missing,
+#             12 validation error.
+
+die() { echo "hp-nodejs-deploy: $1" >&2; exit "${2:-12}"; }
+
+cmd="$1"
+root="$2"
+
+case "$root" in
+  /home/*) ;;
+  *) die "app_root must be an absolute path under /home" ;;
+esac
+case "$root" in
+  *..*) die "app_root must not contain .." ;;
+esac
+[ -d "$root" ] || die "app_root does not exist"
+real="$(realpath "$root")" || die "cannot resolve app_root"
+case "$real" in
+  /home/*) ;;
+  *) die "app_root resolves outside /home" ;;
+esac
+
+releases="$real/releases"
+current="$real/current"
+previous="$real/previous"
+
+check_sha() {
+  echo "$1" | grep -Eq '^[0-9a-f]{7,40}$' || die "invalid sha"
+}
+
+relink() {
+  # $1=link $2=target; ln onto a temp name + mv -T keeps the swap atomic.
+  ln -sfn "$2" "$1.tmp" || die "relink failed" 1
+  mv -T "$1.tmp" "$1" || die "relink failed" 1
+}
+
+case "$cmd" in
+  has-release)
+    check_sha "$3"
+    [ -d "$releases/$3" ] || exit 10
+    [ -f "$releases/$3/manifest.json" ] || exit 11
+    exit 0
+    ;;
+  has-current)
+    [ -L "$current" ] || exit 10
+    exit 0
+    ;;
+  current-target)
+    if [ -L "$current" ]; then readlink "$current"; fi
+    exit 0
+    ;;
+  list-releases)
+    if [ -d "$releases" ]; then ls -1 "$releases"; fi
+    exit 0
+    ;;
+  activate)
+    check_sha "$3"
+    [ -d "$releases/$3" ] || exit 10
+    [ -f "$releases/$3/manifest.json" ] || exit 11
+    old=""
+    if [ -L "$current" ]; then old="$(readlink "$current")"; fi
+    if [ -n "$old" ] && [ "$old" != "releases/$3" ]; then
+      relink "$previous" "$old"
+    fi
+    relink "$current" "releases/$3"
+    # Old target on stdout so the caller can record previous_sha.
+    echo "$old"
+    exit 0
+    ;;
+  *)
+    die "unknown command: $cmd"
+    ;;
+esac

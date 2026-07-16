@@ -77,6 +77,13 @@ Landed so far (Phase 0):
 
 Landed in Phase 1 (release layout + manual activation):
 
+- The deploy pipeline inspects and relinks paths inside user homes, which the core sudoers
+  doesn't cover. Rather than granting raw `ln`/`mv`/`test` wildcards (a root-escalation
+  primitive), the plugin installs a root-owned helper — `/opt/hostpanel/bin/hp-nodejs-deploy` —
+  that validates every argument and confines operations to
+  `<app_root>/{releases,current,previous}` under `/home`. `sudoers/hostpanel-nodejs` grants
+  only that single command; both are installed automatically on package install/update.
+
 - `hostpanel_nodejs/releases.py` — `releases/<sha>` + atomic `current`/`previous` symlink
   layout inside the app's `app_root`, activation, and rollback. Deploy and rollback are the
   same operation: relink + restart. Nothing is mutated in place.

@@ -76,13 +76,15 @@ def ensure_app_directory(app: dict) -> None:
 
 def working_directory(app: dict) -> str:
     """Where the unit runs from: app_root, or app_root/current once the app is
-    in deploy mode and a release has been activated. Checked via sudo because
-    the backend may not have list permission inside user homes."""
+    in deploy mode and a release has been activated. The check goes through the
+    root-owned hp-nodejs-deploy helper because the backend may not have list
+    permission inside user homes (import deferred: releases imports this
+    module for _sudo)."""
     if not app.get("deploy_enabled"):
         return app["app_root"]
-    current = os.path.join(app["app_root"], "current")
-    if _sudo(["test", "-L", current], check=False, timeout=10).returncode == 0:
-        return current
+    from hostpanel_nodejs import releases
+    if releases.has_current(app):
+        return os.path.join(app["app_root"], "current")
     return app["app_root"]
 
 

@@ -1,4 +1,13 @@
-# HostPanel Node.js plugin sudoers
-# Core hostpanel sudoers covers all required permissions for this plugin:
-# systemctl, journalctl, tee, chmod, mkdir, rm, hp-chown, nginx binary.
-# This file is kept as a package placeholder.
+# HostPanel Node.js plugin sudoers -- installed to /etc/sudoers.d/ by the
+# package installer (validated with visudo first, refreshed on every update).
+#
+# One grant only: a root-owned helper that validates its arguments and
+# confines every filesystem operation to <app_root>/{releases,current,previous}
+# under /home. Deliberately NOT raw ln/mv/test/readlink/ls -- broad wildcard
+# grants on those are a root-escalation primitive for the hostpanel group.
+# The helper is written root-owned 0755 by the plugin lifecycle before use.
+#
+# Everything else this plugin runs via sudo (systemctl, tee, mkdir -p, rm,
+# chmod, hp-chown) is covered by the core hostpanel sudoers.
+
+%hostpanel ALL=(root) NOPASSWD: /opt/hostpanel/bin/hp-nodejs-deploy *
