@@ -56,6 +56,31 @@ if "domain_registry" not in sys.modules:
     registry._load_subdomains = lambda: []
     sys.modules["domain_registry"] = registry
 
+# apps.py imports the core auth/session modules at import time; tests only
+# need the shapes, not real JWT handling.
+if "auth" not in sys.modules:
+    auth_mod = types.ModuleType("auth")
+
+    class _User:
+        def __init__(self, username="test", role="admin", linux_user="test", disabled=False, protected=False):
+            self.username = username
+            self.role = role
+            self.linux_user = linux_user
+            self.disabled = disabled
+            self.protected = protected
+
+    auth_mod.User = _User
+    sys.modules["auth"] = auth_mod
+
+if "deps" not in sys.modules:
+    deps_mod = types.ModuleType("deps")
+
+    def _get_current_user():
+        raise RuntimeError("deps shim: override per test")
+
+    deps_mod.get_current_user = _get_current_user
+    sys.modules["deps"] = deps_mod
+
 
 @pytest.fixture
 def fresh_db(tmp_path):
