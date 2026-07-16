@@ -260,11 +260,18 @@ def create_deployment(deployment_id: str, app_id: str, commit_sha: str) -> dict[
     return get_deployment(deployment_id) or {}
 
 
-def set_deployment_status(deployment_id: str, status: str, detail: Optional[str] = None) -> dict[str, Any]:
+def set_deployment_status(
+    deployment_id: str, status: str, detail: Optional[str] = None, finished: Optional[bool] = None
+) -> dict[str, Any]:
+    """`finished` overrides the terminal-status default — Phase 2 closes a
+    deployment at `activated` because health verification only exists from
+    Phase 5 on."""
     if status not in DEPLOYMENT_STATUSES:
         raise ValueError(f"Unknown deployment status: {status}")
     migrate()
-    finished_at = utc_now() if status in DEPLOYMENT_TERMINAL_STATUSES else None
+    if finished is None:
+        finished = status in DEPLOYMENT_TERMINAL_STATUSES
+    finished_at = utc_now() if finished else None
     with get_conn() as conn:
         conn.execute(
             "UPDATE nodejs_deployments SET status=?, detail=COALESCE(?, detail), finished_at=? WHERE id=?",

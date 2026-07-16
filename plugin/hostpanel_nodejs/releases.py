@@ -32,6 +32,7 @@ HELPER = "/opt/hostpanel/bin/hp-nodejs-deploy"
 # Helper exit codes (keep in sync with data/hp-nodejs-deploy).
 HELPER_MISSING = 10
 HELPER_NO_MANIFEST = 11
+HELPER_EXISTS = 13
 
 
 def validate_sha(sha: str) -> str:
@@ -72,6 +73,18 @@ def list_releases(app: dict[str, Any]) -> list[str]:
     if result.returncode != 0:
         return []
     return sorted(line.strip() for line in (result.stdout or "").splitlines() if SHA_RE.fullmatch(line.strip()))
+
+
+def install_release(app: dict[str, Any], sha: str, staged_dir: str) -> None:
+    """Move an extracted release from the plugin staging area into
+    releases/<sha>, owned by the app's user. Releases are immutable — an
+    existing target is a 409, never overwritten."""
+    result = _helper(["install-release", app["app_root"], sha, staged_dir, app["username"]], timeout=120)
+    if result.returncode == HELPER_EXISTS:
+        raise HTTPException(status_code=409, detail=f"Release {sha} already exists")
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "Release install failed").strip()
+        raise HTTPException(status_code=500, detail=detail)
 
 
 def activate(app: dict[str, Any], sha: str) -> dict[str, Any]:

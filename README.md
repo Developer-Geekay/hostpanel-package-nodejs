@@ -98,6 +98,19 @@ POST /apps/{app_id}/rollback      {"sha": "..."} (optional; defaults to previous
 GET  /apps/{app_id}/releases
 ```
 
+Landed in Phase 2 (tarball ingest):
+
+- `POST /apps/{app_id}/deploy` — multipart (`tarball`, `sha256`, `commit`), bearer-token auth
+  (per-app token from `POST /apps/{app_id}/deploy-token`, admin, shown once). The pipeline
+  streams the tarball to disk (never RAM), verifies the checksum, safety-scans every member
+  (no absolute paths, `..`, links, device nodes; size caps), validates `manifest.json` against
+  the app, extracts to the plugin staging dir, installs via `hp-nodejs-deploy install-release`
+  (immutable — an existing SHA is refused), and activates. Deployment rows walk
+  `received → verified → extracted → activated`; health verification arrives in Phase 5.
+- `GET /apps/{app_id}/deployments` — deployment history.
+- One deploy per app at a time; a concurrent POST gets `409`.
+- Tarballs are retained under `/opt/hostpanel/plugins/nodejs/artifacts/<app_id>/`.
+
 Phase 1 manual flow (until GitHub Actions takes over in Phases 2–3):
 
 1. Back up the app's unit file (`/etc/systemd/system/hostpanel-nodejs-<app_id>.service`) —

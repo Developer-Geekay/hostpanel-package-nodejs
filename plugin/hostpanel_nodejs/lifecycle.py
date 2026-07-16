@@ -47,10 +47,23 @@ def _ensure_deploy_helper():
     logger.info("deploy helper installed at %s", HELPER)
 
 
+def _ensure_deploy_dirs():
+    """Staging (tarball extraction) and artifacts (retained tarballs) live in
+    the plugin dir and must be writable by the panel user; created root-side
+    then handed over via hp-chown."""
+    import getpass
+    from hostpanel_nodejs.deploy import ARTIFACTS_DIR, STAGING_DIR
+    me = getpass.getuser()
+    for path in (STAGING_DIR, ARTIFACTS_DIR):
+        _sudo(["mkdir", "-p", path], check=False)
+        _sudo([process.HP_CHOWN, f"{me}:{path}"], check=False)
+
+
 def on_install():
     logger.info("Node.js on_install: initializing runtime state")
     store.migrate()
     _ensure_deploy_helper()
+    _ensure_deploy_dirs()
     missing = [version for version in ("22", "24") if not _runtime_ready(version)]
     if missing:
         logger.warning("Node.js runtime missing or not executable: %s", ", ".join(missing))
@@ -61,6 +74,7 @@ def on_startup():
     logger.info("Node.js on_startup: repairing registered apps")
     store.migrate()
     _ensure_deploy_helper()
+    _ensure_deploy_dirs()
     for app in store.list_apps():
         try:
             if not os.path.exists(process.service_path(app["id"])):
