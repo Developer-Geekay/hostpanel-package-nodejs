@@ -18,8 +18,20 @@ from hostpanel_nodejs import process, store
 #
 # Deploy = relink + restart. Rollback = the same operation aimed at an older
 # SHA. Nothing is ever mutated in place.
+#
+# All link inspection/manipulation goes through the root-owned
+# hp-nodejs-deploy helper (shipped in data/, installed by lifecycle) so the
+# sudo grant stays a single fixed command with validated arguments instead of
+# raw ln/mv/test/readlink wildcards, which would be a root-escalation
+# primitive for the whole hostpanel group.
 
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+HELPER = "/opt/hostpanel/bin/hp-nodejs-deploy"
+
+# Helper exit codes (keep in sync with data/hp-nodejs-deploy).
+HELPER_MISSING = 10
+HELPER_NO_MANIFEST = 11
 
 
 def validate_sha(sha: str) -> str:
@@ -41,28 +53,12 @@ def current_link(app: dict[str, Any]) -> str:
     return os.path.join(app["app_root"], "current")
 
 
-def previous_link(app: dict[str, Any]) -> str:
-    return os.path.join(app["app_root"], "previous")
+def _helper(args: list[str], timeout: int = 30):
+    return process._sudo([HELPER, *args], check=False, timeout=timeout)
 
 
-def _exists(path: str, flag: str = "-e") -> bool:
-    return process._sudo(["test", flag, path], check=False, timeout=10).returncode == 0
-
-
-def _link_target(path: str) -> Optional[str]:
-    result = process._sudo(["readlink", path], check=False, timeout=10)
-    if result.returncode != 0:
-        return None
-    target = (result.stdout or "").strip()
-    return target or None
-
-
-def _relink(link: str, target: str) -> None:
-    # ln -sfn onto a temp name + mv -T makes the pointer swap atomic: readers
-    # see either the old release or the new one, never a missing link.
-    tmp = f"{link}.tmp"
-    process._sudo(["ln", "-sfn", target, tmp], check=True)
-    process._sudo(["mv", "-T", tmp, link], check=True)
+def has_current(app: dict[str, Any]) -> bool:
+    return _helper(["has-current", app["app_root"]], timeout=10).returncode == 0
 
 
 def ensure_layout(app: dict[str, Any]) -> None:
@@ -72,7 +68,7 @@ def ensure_layout(app: dict[str, Any]) -> None:
 
 
 def list_releases(app: dict[str, Any]) -> list[str]:
-    result = process._sudo(["ls", "-1", releases_root(app)], check=False, timeout=10)
+    result = _helper(["list-releases", app["app_root"]], timeout=10)
     if result.returncode != 0:
         return []
     return sorted(line.strip() for line in (result.stdout or "").splitlines() if SHA_RE.fullmatch(line.strip()))
@@ -83,28 +79,30 @@ def activate(app: dict[str, Any], sha: str) -> dict[str, Any]:
 
     The release must already exist on disk (uploaded manually in Phase 1,
     extracted by the deploy endpoint from Phase 2 on) and carry the manifest
-    the tarball contract requires.
+    the tarball contract requires. The helper performs the previous/current
+    relinks atomically and prints the old current target so previous_sha can
+    be recorded.
     """
     sha = validate_sha(sha)
-    release = release_dir(app, sha)
-    if not _exists(release, "-d"):
-        raise HTTPException(status_code=404, detail=f"Release {sha} not found")
-    if not _exists(os.path.join(release, "manifest.json"), "-f"):
-        raise HTTPException(status_code=409, detail=f"Release {sha} has no manifest.json")
-
     ensure_layout(app)
-    old_target = _link_target(current_link(app))
-    if old_target and posixpath.basename(old_target) != sha:
-        _relink(previous_link(app), old_target)
-    # Relative target so the layout survives an app_root move.
-    _relink(current_link(app), f"releases/{sha}")
+
+    result = _helper(["activate", app["app_root"], sha])
+    if result.returncode == HELPER_MISSING:
+        raise HTTPException(status_code=404, detail=f"Release {sha} not found")
+    if result.returncode == HELPER_NO_MANIFEST:
+        raise HTTPException(status_code=409, detail=f"Release {sha} has no manifest.json")
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "Release activation failed").strip()
+        raise HTTPException(status_code=500, detail=detail)
 
     # Rewrite the unit after the link exists so WorkingDirectory resolves to
     # current/ on the first activation, then restart into the new release.
     process.write_service(app)
     process.restart(app["id"])
 
-    previous_sha = posixpath.basename(old_target) if old_target and posixpath.basename(old_target) != sha else app.get("previous_sha")
+    old_target = (result.stdout or "").strip()
+    old_sha = posixpath.basename(old_target) if old_target else None
+    previous_sha = old_sha if old_sha and old_sha != sha else app.get("previous_sha")
     store.add_log(app["id"], "info", f"Activated release {sha}")
     return store.update_app(app["id"], {"current_sha": sha, "previous_sha": previous_sha})
 

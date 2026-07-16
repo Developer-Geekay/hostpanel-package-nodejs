@@ -36,7 +36,7 @@ package's existing v1 rule (no `npm install`/build on the server).
 | Deployment identity | `dep_` + ULID | same — `dep_` + ULID, new id module |
 | Service runtime | new `deployd` daemon on :8787 | new routes on the existing plugin router `/cpanelapi/nodejs` |
 | Persistence | separate `deployd.db` | new tables in HostPanel core SQLite (WAL already on core) |
-| systemd restart | new polkit/sudoers rule | existing `sudoers/hostpanel-nodejs` allowlist (extend only if a new verb is needed) |
+| systemd restart | new polkit/sudoers rule | core sudoers covers systemctl/tee/mkdir/rm; deploy filesystem ops go through the root-owned, argument-validating `/opt/hostpanel/bin/hp-nodejs-deploy` helper (installed by the plugin lifecycle) — the package sudoers grants only that one command; `tests/test_sudoers.py` forbids raw `ln`/`mv`/`test` grants |
 | nginx exposure | new `/deploy/` location → :8787 | existing panel vhost; deploy route needs `client_max_body_size` raised for `/cpanelapi/nodejs/apps/*/deploy` |
 | Env / secrets | `shared/.env` symlinked into release | existing `nodejs_app_env` table injected into the unit — **no `.env` file**; `shared/` kept only for persistent data dirs |
 | Audit | new `audit_log` table | existing HostPanel audit (`audit.log_action`) — every transition and rejection |

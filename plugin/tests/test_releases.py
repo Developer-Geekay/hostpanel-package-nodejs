@@ -25,40 +25,51 @@ def _make_app(app_id: str = "portfolio-example-com", port: int = 31000) -> dict:
     return store.update_app(app_id, {"deploy_enabled": True})
 
 
+class _Result:
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = ""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
 @pytest.fixture
 def activation_env(fresh_db, monkeypatch):
-    """Fake the sudo-backed filesystem and the unit lifecycle so activate()'s
-    ordering and store effects can be asserted without a real system."""
+    """Simulate the hp-nodejs-deploy helper so activate()'s ordering and store
+    effects can be asserted without a real system. Mirrors the helper contract:
+    exit 10 = release missing, 11 = manifest missing; activate performs the
+    previous/current relinks itself and prints the old current target."""
     state = {
-        "releases": set(),
-        "manifests": set(),
-        "current_target": None,
+        "releases": {},  # sha -> has_manifest
+        "current": None,
+        "previous": None,
         "calls": [],
     }
 
-    monkeypatch.setattr(releases, "_exists", lambda path, flag="-e": (
-        path in state["releases"] if flag == "-d" else path in state["manifests"]
-    ))
-    monkeypatch.setattr(releases, "_link_target", lambda path: (
-        state["current_target"] if path.endswith("/current") else None
-    ))
+    def fake_helper(args, timeout=30):
+        cmd, _root, *rest = args
+        state["calls"].append((cmd, *rest))
+        if cmd == "activate":
+            sha = rest[0]
+            if sha not in state["releases"]:
+                return _Result(releases.HELPER_MISSING)
+            if not state["releases"][sha]:
+                return _Result(releases.HELPER_NO_MANIFEST)
+            old = state["current"] or ""
+            if old and old != f"releases/{sha}":
+                state["previous"] = old
+            state["current"] = f"releases/{sha}"
+            return _Result(0, stdout=old + "\n")
+        if cmd == "has-current":
+            return _Result(0 if state["current"] else releases.HELPER_MISSING)
+        if cmd == "list-releases":
+            return _Result(0, stdout="\n".join(sorted(state["releases"])))
+        raise AssertionError(f"unexpected helper command: {cmd}")
 
-    def fake_relink(link, target):
-        state["calls"].append(("relink", link.rsplit("/", 1)[-1], target))
-        if link.endswith("/current"):
-            state["current_target"] = target
-
-    monkeypatch.setattr(releases, "_relink", fake_relink)
+    monkeypatch.setattr(releases, "_helper", fake_helper)
     monkeypatch.setattr(releases, "ensure_layout", lambda app: state["calls"].append(("ensure_layout",)))
     monkeypatch.setattr(process, "write_service", lambda app: state["calls"].append(("write_service",)))
     monkeypatch.setattr(process, "restart", lambda app_id: state["calls"].append(("restart", app_id)))
     return state
-
-
-def _add_release(state, app, sha, with_manifest=True):
-    state["releases"].add(releases.release_dir(app, sha))
-    if with_manifest:
-        state["manifests"].add(releases.release_dir(app, sha) + "/manifest.json")
 
 
 def test_validate_sha():
@@ -69,44 +80,45 @@ def test_validate_sha():
             releases.validate_sha(bad)
 
 
-def test_relink_is_atomic(fresh_db, monkeypatch):
-    commands = []
-    monkeypatch.setattr(process, "_sudo", lambda cmd, **kw: commands.append(cmd) or type("R", (), {"returncode": 0, "stdout": ""})())
-    releases._relink("/home/geekay/public_html/current", "releases/9f2a1c4")
-    assert commands == [
-        ["ln", "-sfn", "releases/9f2a1c4", "/home/geekay/public_html/current.tmp"],
-        ["mv", "-T", "/home/geekay/public_html/current.tmp", "/home/geekay/public_html/current"],
-    ]
-
-
 def test_first_activation(activation_env):
     app = _make_app()
-    _add_release(activation_env, app, "9f2a1c4")
+    activation_env["releases"]["9f2a1c4"] = True
 
     updated = releases.activate(app, "9f2a1c4")
 
     assert updated["current_sha"] == "9f2a1c4"
     assert updated["previous_sha"] is None
-    # current relinked, no previous link (nothing to preserve), unit rewritten
-    # only after the link exists, restart last.
-    relinks = [c for c in activation_env["calls"] if c[0] == "relink"]
-    assert relinks == [("relink", "current", "releases/9f2a1c4")]
+    assert activation_env["current"] == "releases/9f2a1c4"
+    # Relink happens before the unit rewrite so WorkingDirectory resolves to
+    # current/ on the first activation; restart comes last.
     ordered = [c[0] for c in activation_env["calls"]]
-    assert ordered.index("write_service") < ordered.index("restart")
-    assert ordered.index("relink") < ordered.index("write_service")
+    assert ordered.index("activate") < ordered.index("write_service") < ordered.index("restart")
 
 
 def test_second_activation_preserves_previous(activation_env):
     app = _make_app()
-    _add_release(activation_env, app, "9f2a1c4")
-    _add_release(activation_env, app, "3b8d040")
+    activation_env["releases"]["9f2a1c4"] = True
+    activation_env["releases"]["3b8d040"] = True
     releases.activate(app, "9f2a1c4")
 
     updated = releases.activate(store.get_app(app["id"]), "3b8d040")
 
     assert updated["current_sha"] == "3b8d040"
     assert updated["previous_sha"] == "9f2a1c4"
-    assert ("relink", "previous", "releases/9f2a1c4") in activation_env["calls"]
+    assert activation_env["previous"] == "releases/9f2a1c4"
+
+
+def test_reactivating_same_sha_keeps_previous(activation_env):
+    app = _make_app()
+    activation_env["releases"]["9f2a1c4"] = True
+    activation_env["releases"]["3b8d040"] = True
+    releases.activate(app, "9f2a1c4")
+    releases.activate(store.get_app(app["id"]), "3b8d040")
+
+    updated = releases.activate(store.get_app(app["id"]), "3b8d040")
+
+    assert updated["current_sha"] == "3b8d040"
+    assert updated["previous_sha"] == "9f2a1c4"
 
 
 def test_activate_missing_release_is_404(activation_env):
@@ -119,16 +131,26 @@ def test_activate_missing_release_is_404(activation_env):
 
 def test_activate_without_manifest_is_409(activation_env):
     app = _make_app()
-    _add_release(activation_env, app, "9f2a1c4", with_manifest=False)
+    activation_env["releases"]["9f2a1c4"] = False
     with pytest.raises(HTTPException) as exc:
         releases.activate(app, "9f2a1c4")
     assert exc.value.status_code == 409
 
 
+def test_activate_helper_failure_is_500(activation_env, monkeypatch):
+    app = _make_app()
+    monkeypatch.setattr(releases, "ensure_layout", lambda app: None)
+    monkeypatch.setattr(releases, "_helper", lambda args, timeout=30: _Result(12, stderr="hp-nodejs-deploy: invalid app_root"))
+    with pytest.raises(HTTPException) as exc:
+        releases.activate(app, "9f2a1c4")
+    assert exc.value.status_code == 500
+    assert "invalid app_root" in exc.value.detail
+
+
 def test_rollback_defaults_to_previous(activation_env):
     app = _make_app()
-    _add_release(activation_env, app, "9f2a1c4")
-    _add_release(activation_env, app, "3b8d040")
+    activation_env["releases"]["9f2a1c4"] = True
+    activation_env["releases"]["3b8d040"] = True
     releases.activate(app, "9f2a1c4")
     releases.activate(store.get_app(app["id"]), "3b8d040")
 
@@ -144,13 +166,19 @@ def test_rollback_without_previous_is_409(activation_env):
     assert exc.value.status_code == 409
 
 
-def test_working_directory_selection(fresh_db, monkeypatch):
+def test_list_releases_filters_non_sha_entries(activation_env):
+    app = _make_app()
+    activation_env["releases"]["9f2a1c4"] = True
+    activation_env["releases"]["not-a-sha"] = True
+    assert releases.list_releases(app) == ["9f2a1c4"]
+
+
+def test_working_directory_selection(activation_env):
     app = {"app_root": "/home/geekay/public_html", "deploy_enabled": False}
     assert process.working_directory(app) == "/home/geekay/public_html"
 
     app["deploy_enabled"] = True
-    monkeypatch.setattr(process, "_sudo", lambda cmd, **kw: type("R", (), {"returncode": 0})())
-    assert process.working_directory(app) == "/home/geekay/public_html/current"
+    assert process.working_directory(app) == "/home/geekay/public_html"  # no current yet
 
-    monkeypatch.setattr(process, "_sudo", lambda cmd, **kw: type("R", (), {"returncode": 1})())
-    assert process.working_directory(app) == "/home/geekay/public_html"
+    activation_env["current"] = "releases/9f2a1c4"
+    assert process.working_directory(app) == "/home/geekay/public_html/current"
