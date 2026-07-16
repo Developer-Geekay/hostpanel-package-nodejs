@@ -48,6 +48,14 @@ def _make_db_shim() -> types.ModuleType:
 if "db" not in sys.modules:
     sys.modules["db"] = _make_db_shim()
 
+# validators.py pulls the core domain registry at import time; tests don't
+# exercise domain resolution, so an empty registry is enough.
+if "domain_registry" not in sys.modules:
+    registry = types.ModuleType("domain_registry")
+    registry._load_domains = lambda: []
+    registry._load_subdomains = lambda: []
+    sys.modules["domain_registry"] = registry
+
 
 @pytest.fixture
 def fresh_db(tmp_path):

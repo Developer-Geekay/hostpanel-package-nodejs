@@ -75,6 +75,35 @@ Landed so far (Phase 0):
 - `plugin/tests/` — pytest suite covering ids and the migration (run with
   `python3 -m pytest plugin/tests`).
 
+Landed in Phase 1 (release layout + manual activation):
+
+- `hostpanel_nodejs/releases.py` — `releases/<sha>` + atomic `current`/`previous` symlink
+  layout inside the app's `app_root`, activation, and rollback. Deploy and rollback are the
+  same operation: relink + restart. Nothing is mutated in place.
+- Deploy-enabled apps run their unit from `<app_root>/current`; apps with deploy mode off are
+  untouched.
+- Admin-only interim routes (replaced by the ingest endpoint + panel UI in later phases):
+
+```text
+POST /apps/{app_id}/deploy-mode   {"enabled": true|false}
+POST /apps/{app_id}/activate      {"sha": "<short-or-full-commit-sha>"}
+POST /apps/{app_id}/rollback      {"sha": "..."} (optional; defaults to previous)
+GET  /apps/{app_id}/releases
+```
+
+Phase 1 manual flow (until GitHub Actions takes over in Phases 2–3):
+
+1. Back up the app's unit file (`/etc/systemd/system/hostpanel-nodejs-<app_id>.service`) —
+   restoring it plus `systemctl daemon-reload` and toggling deploy-mode off is the revert.
+2. `POST /apps/{app_id}/deploy-mode {"enabled": true}` — creates `releases/`, `shared/`,
+   `artifacts/`; the running unit is untouched until the first activation.
+3. Build locally, copy the output (including a `manifest.json` per `manifest.schema.json`)
+   to `<app_root>/releases/<short-sha>/`.
+4. `POST /apps/{app_id}/activate {"sha": "<short-sha>"}` — flips `current`, rewrites the
+   unit to run from it, restarts.
+5. Repeat with a second SHA, then `POST /apps/{app_id}/rollback` and confirm the site
+   reverts in under 5 seconds.
+
 ## Build
 
 ```bash
