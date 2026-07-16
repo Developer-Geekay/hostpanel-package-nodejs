@@ -10,6 +10,34 @@ def utc_now() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
 
+# Push-deploy pipeline states (see DEPLOY_PLAN.md). Terminal states close the row.
+DEPLOYMENT_STATUSES = (
+    "received",
+    "verified",
+    "extracted",
+    "activated",
+    "healthy",
+    "failed",
+    "rolled_back",
+)
+DEPLOYMENT_TERMINAL_STATUSES = {"healthy", "failed", "rolled_back"}
+
+# Deploy-related nodejs_apps columns added after the initial schema; all default
+# to "deploy disabled" so existing apps keep today's behavior untouched.
+_DEPLOY_APP_COLUMNS = (
+    ("deploy_enabled", "INTEGER NOT NULL DEFAULT 0"),
+    ("repo", "TEXT"),
+    ("ref", "TEXT"),
+    ("health_path", "TEXT"),
+    ("keep_releases", "INTEGER NOT NULL DEFAULT 5"),
+    ("health_timeout_s", "INTEGER NOT NULL DEFAULT 30"),
+    ("health_interval_s", "INTEGER NOT NULL DEFAULT 2"),
+    ("current_sha", "TEXT"),
+    ("previous_sha", "TEXT"),
+    ("deploy_token_hash", "TEXT"),
+)
+
+
 def migrate() -> None:
     with get_conn() as conn:
         conn.executescript(
@@ -45,13 +73,31 @@ def migrate() -> None:
               message TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS nodejs_deployments (
+              id TEXT PRIMARY KEY,
+              app_id TEXT NOT NULL REFERENCES nodejs_apps(id),
+              commit_sha TEXT NOT NULL,
+              status TEXT NOT NULL,
+              detail TEXT,
+              started_at TEXT NOT NULL,
+              finished_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_nodejs_deployments_app
+              ON nodejs_deployments(app_id, started_at);
             """
         )
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(nodejs_apps)")}
+        for name, definition in _DEPLOY_APP_COLUMNS:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE nodejs_apps ADD COLUMN {name} {definition}")
 
 
 def _row_to_app(row: Any) -> dict[str, Any]:
     app = dict(row)
     app["ssl_enabled"] = bool(app.get("ssl_enabled"))
+    app["deploy_enabled"] = bool(app.get("deploy_enabled"))
     app["env"] = get_env(app["id"])
     return app
 
@@ -157,6 +203,9 @@ def delete_app(app_id: str) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM nodejs_app_env WHERE app_id=?", (app_id,))
         conn.execute("DELETE FROM nodejs_app_logs WHERE app_id=?", (app_id,))
+        # Deployment rows go with the app (FK requires it); the durable history
+        # of every deploy lives in the core audit_log, which is never pruned here.
+        conn.execute("DELETE FROM nodejs_deployments WHERE app_id=?", (app_id,))
         conn.execute("DELETE FROM nodejs_apps WHERE id=?", (app_id,))
 
 
@@ -186,6 +235,46 @@ def list_lifecycle_logs(app_id: str, limit: int = 100) -> list[dict[str, Any]]:
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT level, message, created_at FROM nodejs_app_logs WHERE app_id=? ORDER BY id DESC LIMIT ?",
+            (app_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_deployment(deployment_id: str, app_id: str, commit_sha: str) -> dict[str, Any]:
+    migrate()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO nodejs_deployments (id, app_id, commit_sha, status, started_at) VALUES (?,?,?,?,?)",
+            (deployment_id, app_id, commit_sha, "received", utc_now()),
+        )
+    return get_deployment(deployment_id) or {}
+
+
+def set_deployment_status(deployment_id: str, status: str, detail: Optional[str] = None) -> dict[str, Any]:
+    if status not in DEPLOYMENT_STATUSES:
+        raise ValueError(f"Unknown deployment status: {status}")
+    migrate()
+    finished_at = utc_now() if status in DEPLOYMENT_TERMINAL_STATUSES else None
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE nodejs_deployments SET status=?, detail=COALESCE(?, detail), finished_at=? WHERE id=?",
+            (status, detail, finished_at, deployment_id),
+        )
+    return get_deployment(deployment_id) or {}
+
+
+def get_deployment(deployment_id: str) -> Optional[dict[str, Any]]:
+    migrate()
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM nodejs_deployments WHERE id=?", (deployment_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_deployments(app_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    migrate()
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM nodejs_deployments WHERE app_id=? ORDER BY id DESC LIMIT ?",
             (app_id, limit),
         ).fetchall()
     return [dict(row) for row in rows]
