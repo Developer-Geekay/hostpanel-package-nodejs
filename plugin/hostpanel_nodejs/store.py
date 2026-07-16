@@ -98,6 +98,9 @@ def _row_to_app(row: Any) -> dict[str, Any]:
     app = dict(row)
     app["ssl_enabled"] = bool(app.get("ssl_enabled"))
     app["deploy_enabled"] = bool(app.get("deploy_enabled"))
+    # Legacy Phase 2 column — auth is OIDC now; never expose credential
+    # material (even hashes) through the API.
+    app.pop("deploy_token_hash", None)
     app["env"] = get_env(app["id"])
     return app
 
@@ -191,7 +194,6 @@ def update_app(app_id: str, data: dict[str, Any], env: Optional[dict[str, str]] 
         "health_interval_s",
         "current_sha",
         "previous_sha",
-        "deploy_token_hash",
     ):
         if key in data:
             fields.append(f"{key}=?")

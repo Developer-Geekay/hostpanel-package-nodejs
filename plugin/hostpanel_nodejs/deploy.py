@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import os
 import posixpath
 import re
-import secrets
 import shutil
 import tarfile
 import threading
@@ -47,27 +45,9 @@ _locks_guard = threading.Lock()
 _deploy_locks: dict[str, threading.Lock] = {}
 
 
-# ── deploy token (interim auth — replaced by GitHub OIDC in Phase 4) ─────────
-
-def _hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
-
-def issue_token(app_id: str) -> str:
-    token = secrets.token_urlsafe(32)
-    store.update_app(app_id, {"deploy_token_hash": _hash_token(token)})
-    return token
-
-
-def verify_token(app: dict[str, Any], authorization: Optional[str]) -> None:
-    stored = app.get("deploy_token_hash")
-    if not stored:
-        raise HTTPException(status_code=403, detail="No deploy token configured for this application")
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    supplied = authorization[len("Bearer "):].strip()
-    if not hmac.compare_digest(_hash_token(supplied), stored):
-        raise HTTPException(status_code=403, detail="Invalid deploy token")
-
+# Auth lives in oidc.py since Phase 4 — the static deploy-token mechanism is
+# gone (the legacy deploy_token_hash DB column stays, unused and never
+# serialized; dropping SQLite columns isn't worth the risk).
 
 # ── pipeline pieces ──────────────────────────────────────────────────────────
 

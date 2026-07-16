@@ -81,31 +81,12 @@ def _deploy(data: bytes, sha256: str | None = None, commit: str = SHORT):
     return deploy.run_deploy(app, io.BytesIO(data), sha256 or hashlib.sha256(data).hexdigest(), commit)
 
 
-# ── token auth ───────────────────────────────────────────────────────────────
+# Auth is covered by test_oidc.py since Phase 4; API responses must never
+# carry credential material.
 
-def test_token_roundtrip(fresh_db):
+def test_app_rows_never_expose_token_hash(fresh_db):
     _make_app()
-    token = deploy.issue_token(APP_ID)
-    app = store.get_app(APP_ID)
-    assert app["deploy_token_hash"] != token  # only the hash is stored
-    deploy.verify_token(app, f"Bearer {token}")
-
-
-def test_token_rejections(fresh_db):
-    _make_app()
-    app = store.get_app(APP_ID)
-    with pytest.raises(HTTPException) as exc:
-        deploy.verify_token(app, "Bearer anything")
-    assert exc.value.status_code == 403  # no token configured
-
-    deploy.issue_token(APP_ID)
-    app = store.get_app(APP_ID)
-    with pytest.raises(HTTPException) as exc:
-        deploy.verify_token(app, None)
-    assert exc.value.status_code == 401
-    with pytest.raises(HTTPException) as exc:
-        deploy.verify_token(app, "Bearer wrong-token")
-    assert exc.value.status_code == 403
+    assert "deploy_token_hash" not in store.get_app(APP_ID)
 
 
 # ── pipeline ─────────────────────────────────────────────────────────────────

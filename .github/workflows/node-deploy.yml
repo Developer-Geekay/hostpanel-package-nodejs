@@ -4,8 +4,10 @@
 # ~8 lines (see README "Push Deploys"). Node-specific logic lives entirely
 # here — never on the Pi.
 #
-# Auth is the per-app deploy token (interim); Phase 4 replaces the secrets
-# with GitHub OIDC.
+# Auth is GitHub OIDC (Phase 4): the job requests a short-lived token with
+# the fixed audience below; the plugin verifies it against GitHub's JWKS and
+# authorizes the repository/ref claims against the app row. No deploy
+# credential is stored anywhere. Callers must grant `id-token: write`.
 #
 # Injection hygiene: the *_cmd inputs are executed on purpose (that is the
 # feature); every other input reaches the shell only via quoted env vars and
@@ -54,13 +56,13 @@ on:
       DEPLOY_URL:
         description: Panel origin, e.g. https://cpanel.consoleapi.in:2083
         required: true
-      DEPLOY_TOKEN:
-        description: Per-app deploy token minted via POST /apps/{app_id}/deploy-token
-        required: true
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     env:
       APP_ID: ${{ inputs.app_id }}
       NODE_VERSION: ${{ inputs.node_version }}
@@ -133,13 +135,21 @@ jobs:
       - name: Deploy
         env:
           DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
-          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
         run: |
           set -euo pipefail
+          # Short-lived GitHub OIDC token proving this run's repository/ref;
+          # the audience must match the plugin's expected constant.
+          oidc_json="$(curl -sS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hostpanel-nodejs-deploy")"
+          oidc_token="$(printf '%s' "$oidc_json" | jq -r '.value // empty')"
+          if [ -z "$oidc_token" ]; then
+            echo "::error::Failed to obtain OIDC token — does the caller grant 'id-token: write'?"
+            exit 1
+          fi
           sha256="$(sha256sum "${RUNNER_TEMP}/app.tar.gz" | cut -d' ' -f1)"
           http_code="$(curl -sS -o "${RUNNER_TEMP}/deploy-response.json" -w '%{http_code}' -X POST \
             "${DEPLOY_URL}/cpanelapi/nodejs/apps/${APP_ID}/deploy" \
-            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -H "Authorization: Bearer ${oidc_token}" \
             -F "tarball=@${RUNNER_TEMP}/app.tar.gz" \
             -F "sha256=${sha256}" \
             -F "commit=${COMMIT_SHA}")"

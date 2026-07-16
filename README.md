@@ -124,6 +124,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   deploy:
     uses: Developer-Geekay/hostpanel-package-nodejs/.github/workflows/node-deploy.yml@main
@@ -132,11 +136,27 @@ jobs:
       artifact_paths: dist server.js data package.json
     secrets:
       DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
-      DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
 ```
 
-- Repo secrets required: `DEPLOY_URL` (panel origin) and `DEPLOY_TOKEN` (minted once via
-  `POST /apps/{app_id}/deploy-token`). Both disappear in Phase 4 (OIDC).
+- Repo secret required: `DEPLOY_URL` (panel origin). The caller must also grant
+  `permissions: id-token: write` — see Phase 4 below.
+
+Landed in Phase 4 (GitHub OIDC — no stored credentials):
+
+- The workflow requests a short-lived GitHub OIDC token (audience
+  `hostpanel-nodejs-deploy`, a protocol constant on both sides) and sends it as the deploy
+  bearer token. The plugin verifies the signature against GitHub's JWKS (cached hourly,
+  stale-tolerated on GitHub outages) plus `iss`/`aud`/`exp` with clock skew, then authorizes
+  the token's `repository`/`ref` claims against the app row.
+- Set the authorized source per app (admin):
+  `POST /apps/{app_id}/deploy-mode {"enabled": true, "repo": "owner/name", "ref": "refs/heads/main"}`
+  (`ref` defaults to `refs/heads/main` when `repo` is given). A valid token from any other
+  repo or branch — including forks — gets `403` + an audit row carrying both the claimed and
+  expected source.
+- The static deploy-token mechanism is deleted: `POST /apps/{app_id}/deploy-token` is gone,
+  the `DEPLOY_TOKEN` secret is no longer read, and app API responses never include
+  credential material. (The legacy `deploy_token_hash` DB column remains, unused — dropping
+  SQLite columns isn't worth the risk.)
 
 Phase 1 manual flow (until GitHub Actions takes over in Phases 2–3):
 

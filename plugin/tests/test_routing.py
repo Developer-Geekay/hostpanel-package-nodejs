@@ -25,5 +25,6 @@ def test_public_router_carries_nothing_else():
 def test_plugin_exposes_both_contracts():
     assert plugin.routers == [router]
     assert plugin.public_routers == [ci_router]
-    # Panel-session routes (incl. deploy-token minting) stay on the wrapped router.
-    assert "/cpanelapi/nodejs/apps/{app_id}/deploy-token" in _paths(router)
+    # The deploy-token mechanism is gone since Phase 4 (OIDC).
+    assert "/cpanelapi/nodejs/apps/{app_id}/deploy-token" not in _paths(router)
+    assert "/cpanelapi/nodejs/apps/{app_id}/deploy-mode" in _paths(router)
