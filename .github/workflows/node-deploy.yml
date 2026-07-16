@@ -1,0 +1,135 @@
+# Reusable deploy workflow for HostPanel Node.js apps (DEPLOY_PLAN.md Phase 3).
+#
+# GitHub builds; the Pi only extracts and restarts. Consumers call this with
+# ~8 lines (see README "Push Deploys"). Node-specific logic lives entirely
+# here — never on the Pi.
+#
+# Auth is the per-app deploy token (interim); Phase 4 replaces the secrets
+# with GitHub OIDC.
+#
+# Injection hygiene: the *_cmd inputs are executed on purpose (that is the
+# feature); every other input reaches the shell only via quoted env vars and
+# is shape-validated first.
+
+name: Build and deploy to HostPanel
+
+on:
+  workflow_call:
+    inputs:
+      app_id:
+        description: HostPanel Node.js app id (nodejs_apps.id)
+        required: true
+        type: string
+      node_version:
+        description: Node.js major version (22 or 24 — must be bundled by the package)
+        default: "22"
+        type: string
+      install_cmd:
+        default: npm ci
+        type: string
+      test_cmd:
+        description: Failing tests block the deploy
+        default: npm test --if-present
+        type: string
+      build_cmd:
+        default: npm run build
+        type: string
+      artifact_paths:
+        description: Space-separated files/dirs copied into the tarball root
+        default: dist server.js package.json
+        type: string
+      include_prod_node_modules:
+        description: Prune dev deps and ship node_modules in the tarball
+        default: false
+        type: boolean
+      entrypoint:
+        default: server.js
+        type: string
+      health:
+        description: HTTP path polled after restart (health enforcement lands in Phase 5)
+        default: /
+        type: string
+    secrets:
+      DEPLOY_URL:
+        description: Panel origin, e.g. https://cpanel.consoleapi.in:2083
+        required: true
+      DEPLOY_TOKEN:
+        description: Per-app deploy token minted via POST /apps/{app_id}/deploy-token
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      APP_ID: ${{ inputs.app_id }}
+      NODE_VERSION: ${{ inputs.node_version }}
+      ENTRYPOINT: ${{ inputs.entrypoint }}
+      HEALTH: ${{ inputs.health }}
+      ARTIFACT_PATHS: ${{ inputs.artifact_paths }}
+      INCLUDE_NODE_MODULES: ${{ inputs.include_prod_node_modules }}
+      COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          echo "$APP_ID" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}$' || { echo "invalid app_id"; exit 1; }
+          echo "$NODE_VERSION" | grep -Eq '^(22|24)$' || { echo "node_version must be 22 or 24"; exit 1; }
+          case "$HEALTH" in /*) ;; *) echo "health must start with /"; exit 1;; esac
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+
+      - name: Install
+        run: ${{ inputs.install_cmd }}
+
+      - name: Test
+        run: ${{ inputs.test_cmd }}
+
+      - name: Build
+        run: ${{ inputs.build_cmd }}
+
+      - name: Assemble artifact
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"
+          for p in $ARTIFACT_PATHS; do
+            cp -R "$p" "$stage/"
+          done
+          if [ "$INCLUDE_NODE_MODULES" = "true" ]; then
+            npm prune --omit=dev
+            cp -R node_modules "$stage/"
+          fi
+          jq -n \
+            --arg app_id "$APP_ID" \
+            --arg runtime "node${NODE_VERSION}" \
+            --arg entrypoint "$ENTRYPOINT" \
+            --arg health "$HEALTH" \
+            --arg commit "$COMMIT_SHA" \
+            --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{schema: 1, app_id: $app_id, runtime: $runtime, entrypoint: $entrypoint,
+              health: $health, commit: $commit, built_at: $built_at}' \
+            > "$stage/manifest.json"
+          cat "$stage/manifest.json"
+          tar -czf "${RUNNER_TEMP}/app.tar.gz" -C "$stage" .
+          ls -lh "${RUNNER_TEMP}/app.tar.gz"
+
+      - name: Deploy
+        env:
+          DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          sha256="$(sha256sum "${RUNNER_TEMP}/app.tar.gz" | cut -d' ' -f1)"
+          http_code="$(curl -sS -o "${RUNNER_TEMP}/deploy-response.json" -w '%{http_code}' -X POST \
+            "${DEPLOY_URL}/cpanelapi/nodejs/apps/${APP_ID}/deploy" \
+            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -F "tarball=@${RUNNER_TEMP}/app.tar.gz" \
+            -F "sha256=${sha256}" \
+            -F "commit=${COMMIT_SHA}")"
+          echo "HTTP ${http_code}"
+          cat "${RUNNER_TEMP}/deploy-response.json"; echo
+          test "${http_code}" = "200"
