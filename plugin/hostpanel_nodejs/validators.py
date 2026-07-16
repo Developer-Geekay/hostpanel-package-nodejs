@@ -172,6 +172,24 @@ def validate_env(env: Optional[dict[str, str]]) -> dict[str, str]:
     return clean
 
 
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+REF_RE = re.compile(r"^refs/[A-Za-z0-9_./-]+$")
+
+
+def validate_repo(repo: str) -> str:
+    value = (repo or "").strip()
+    if not REPO_RE.fullmatch(value):
+        raise HTTPException(status_code=400, detail="Repository must be owner/name")
+    return value
+
+
+def validate_ref(ref: str) -> str:
+    value = (ref or "").strip()
+    if not REF_RE.fullmatch(value) or ".." in value:
+        raise HTTPException(status_code=400, detail="Ref must be a fully qualified git ref, e.g. refs/heads/main")
+    return value
+
+
 def validate_command(command: str, field: str) -> str:
     value = (command or "").strip()
     if "\x00" in value or len(value) > 512:

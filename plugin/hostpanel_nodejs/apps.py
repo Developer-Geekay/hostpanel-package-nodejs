@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from auth import User
 from deps import get_current_user
 
-from hostpanel_nodejs import audit, deploy, logs, nginx, process, releases, store, validators
+from hostpanel_nodejs import audit, deploy, logs, nginx, oidc, process, releases, store, validators
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +245,8 @@ async def get_logs(app_id: str, current_user: User = Depends(get_current_user)):
 
 class DeployModeRequest(BaseModel):
     enabled: bool
+    repo: Optional[str] = Field(default=None, max_length=140, description="owner/name authorized to deploy (OIDC repository claim)")
+    ref: Optional[str] = Field(default=None, max_length=255, description="git ref authorized to deploy; defaults to refs/heads/main when repo is set")
 
 
 class ActivateRequest(BaseModel):
@@ -266,15 +268,24 @@ async def set_deploy_mode(app_id: str, request: DeployModeRequest, current_user:
     """
     _ensure_admin(current_user)
     app = await get_app(app_id, current_user)
+    patch: dict = {"deploy_enabled": request.enabled}
+    if request.repo is not None:
+        patch["repo"] = validators.validate_repo(request.repo)
+        patch["ref"] = validators.validate_ref(request.ref or "refs/heads/main")
+    elif request.ref is not None:
+        patch["ref"] = validators.validate_ref(request.ref)
     if request.enabled:
         releases.ensure_layout(app)
-        updated = store.update_app(app["id"], {"deploy_enabled": True})
+        updated = store.update_app(app["id"], patch)
         process.write_service(updated)
     else:
-        updated = store.update_app(app["id"], {"deploy_enabled": False})
+        updated = store.update_app(app["id"], patch)
         process.write_service(updated)
         process.restart(app["id"])
-    audit.log_action(current_user, "nodejs.deploy_mode_set", app["id"], {"enabled": request.enabled})
+    audit.log_action(
+        current_user, "nodejs.deploy_mode_set", app["id"],
+        {"enabled": request.enabled, "repo": updated.get("repo"), "ref": updated.get("ref")},
+    )
     return updated
 
 
@@ -322,17 +333,6 @@ async def get_releases(app_id: str, current_user: User = Depends(get_current_use
     }
 
 
-@router.post("/apps/{app_id}/deploy-token")
-async def issue_deploy_token(app_id: str, current_user: User = Depends(get_current_user)):
-    """Mint the per-app deploy bearer token (admin only). Only its hash is
-    stored — the token is shown once. Interim auth until Phase 4 (OIDC)."""
-    _ensure_admin(current_user)
-    app = await get_app(app_id, current_user)
-    token = deploy.issue_token(app["id"])
-    audit.log_action(current_user, "nodejs.deploy_token_issue", app["id"], {})
-    return {"token": token, "note": "Store this now — it is shown once and only its hash is kept."}
-
-
 @router.get("/apps/{app_id}/deployments")
 async def list_deployments(app_id: str, current_user: User = Depends(get_current_user)):
     app = await get_app(app_id, current_user)
@@ -347,7 +347,7 @@ def deploy_app(
     commit: str = Form(...),
     authorization: Optional[str] = Header(default=None),
 ):
-    """Tarball ingest for CI (GitHub Actions). Bearer-token auth — this is the
+    """Tarball ingest for CI (GitHub Actions). GitHub OIDC auth — this is the
     one route with no panel session. Sync def on purpose: FastAPI runs it in
     the threadpool, where the streaming/extraction work belongs."""
     app = store.get_app(validators.validate_app_id(app_id))
@@ -357,10 +357,16 @@ def deploy_app(
     if not app.get("deploy_enabled"):
         audit.log_action(deploy.CI_ACTOR, "nodejs.deploy", app["id"], {"error": "deploy mode disabled"}, status="failed")
         raise HTTPException(status_code=409, detail="Deploy mode is not enabled for this application")
+    claims = None
     try:
-        deploy.verify_token(app, authorization)
+        claims = oidc.verify(authorization)
+        oidc.authorize(app, claims)
     except HTTPException as exc:
-        audit.log_action(deploy.CI_ACTOR, "nodejs.deploy_auth", app["id"], {"error": exc.detail}, status="failed")
+        detail = {"error": exc.detail}
+        if claims:
+            detail["repository"] = claims.get("repository")
+            detail["ref"] = claims.get("ref")
+        audit.log_action(deploy.CI_ACTOR, "nodejs.deploy_auth", app["id"], detail, status="failed")
         raise
     return deploy.run_deploy(app, tarball.file, sha256, commit)
 

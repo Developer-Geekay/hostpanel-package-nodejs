@@ -239,13 +239,18 @@ endpoint design doesn't change, only how the POST arrives.
 
 Branch: `feat/deploy-phase-4-oidc`
 
-1. Workflow: `permissions: id-token: write`; audience = the deploy URL origin; send as Bearer.
-2. Plugin: fetch + cache GitHub JWKS (hourly refresh, serve stale on fetch failure); validate
-   signature, `iss`, `aud`, `exp`, skew.
+1. Workflow: `permissions: id-token: write`; audience = `hostpanel-nodejs-deploy` (a protocol
+   constant on both sides, not the deploy URL — no environment-specific value to configure and
+   still unusable for any other service); send as Bearer.
+2. Plugin: fetch + cache GitHub JWKS (hourly refresh, serve stale on fetch failure, forced
+   refresh on unknown kid rate-limited to 1/min); validate signature, `iss`, `aud`, `exp`, skew.
 3. Authorize: `repository` claim must equal `nodejs_apps.repo`, `ref` claim must equal
-   `nodejs_apps.ref` (set per app in the panel UI). Mismatch → `403` + audit row with app id,
-   claimed repo, expected repo.
-4. Remove the token path; drop `deploy_token_hash`; delete the GitHub secret.
+   `nodejs_apps.ref` — set per app via
+   `POST /apps/{id}/deploy-mode {"enabled": true, "repo": "owner/name", "ref": "refs/heads/main"}`
+   until the Phase 7 UI. Mismatch → `403` + audit row with app id, claimed repo, expected repo.
+4. Remove the token path; delete the GitHub secret. The `deploy_token_hash` column stays in
+   SQLite but is never written or serialized again (dropping columns isn't worth the risk);
+   `_row_to_app` strips it so credential material never leaves the DB layer.
 
 Acceptance: no secrets anywhere; non-`main` branch rejected; forged token rejected; **a valid
 token from repo A aimed at repo B's app id rejected with 403**.

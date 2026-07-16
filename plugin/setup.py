@@ -3,11 +3,11 @@ from setuptools import find_packages, setup
 
 setup(
     name="hostpanel-nodejs",
-    version="1.3.1",
+    version="1.4.0",
     packages=find_packages(),
     package_data={"hostpanel_nodejs": ["data/*"]},
     include_package_data=True,
-    install_requires=["fastapi", "pydantic"],
+    install_requires=["fastapi", "pydantic", "PyJWT[crypto]"],
     entry_points={
         "hostpanel.modules": [
             "nodejs = hostpanel_nodejs.plugin",
