@@ -89,6 +89,32 @@ case "$cmd" in
     chown -R "$owner:$owner" "$releases/$3" || die "chown failed" 1
     exit 0
     ;;
+  prune)
+    # prune <app_root> <keep_n>
+    # Deletes the oldest release dirs beyond keep_n. The releases pointed at
+    # by current and previous are never deleted regardless of count. Each
+    # deleted sha is printed on stdout so the caller can drop its artifact.
+    keep_n="$3"
+    echo "$keep_n" | grep -Eq '^[1-9][0-9]*$' || die "invalid keep count"
+    [ -d "$releases" ] || exit 0
+    curtgt=""; prevtgt=""
+    if [ -L "$current" ]; then curtgt="$(basename "$(readlink "$current")")"; fi
+    if [ -L "$previous" ]; then prevtgt="$(basename "$(readlink "$previous")")"; fi
+    seen=0
+    ls -1t "$releases" | while read -r name; do
+      echo "$name" | grep -Eq '^[0-9a-f]{7,40}$' || continue
+      seen=$((seen + 1))
+      if [ "$seen" -le "$keep_n" ]; then
+        continue
+      fi
+      if [ "$name" = "$curtgt" ] || [ "$name" = "$prevtgt" ]; then
+        continue
+      fi
+      rm -rf "${releases:?}/${name}"
+      echo "$name"
+    done
+    exit 0
+    ;;
   activate)
     check_sha "$3"
     [ -d "$releases/$3" ] || exit 10

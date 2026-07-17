@@ -64,16 +64,41 @@ def _tarball(manifest: dict | None = None, extra=None) -> bytes:
     return buf.getvalue()
 
 
+class _DeployEnv:
+    """Stubs for the root-helper, activation, and health boundaries, which
+    unit tests can't run for real. Health defaults to passing; failure-path
+    tests push results (None = healthy, str = failure reason) onto
+    `health_results`, consumed one per wait_healthy call."""
+
+    def __init__(self):
+        self.calls: list = []
+        self.health_results: list = []
+        self.activate_error: Exception | None = None
+        self.pruned: list[str] = []
+
+
 @pytest.fixture
 def deploy_env(fresh_db, monkeypatch, tmp_path):
-    """Point staging/artifacts at tmp and stub the root-helper + activation
-    boundary, which unit tests can't run for real."""
+    env = _DeployEnv()
     monkeypatch.setattr(deploy, "STAGING_DIR", str(tmp_path / "staging"))
     monkeypatch.setattr(deploy, "ARTIFACTS_DIR", str(tmp_path / "artifacts"))
-    calls = []
-    monkeypatch.setattr(releases, "install_release", lambda app, sha, src: calls.append(("install", sha, src)))
-    monkeypatch.setattr(releases, "activate", lambda app, sha: calls.append(("activate", sha)) or store.get_app(app["id"]))
-    return calls
+
+    def fake_activate(app, sha):
+        env.calls.append(("activate", sha))
+        if env.activate_error is not None:
+            raise env.activate_error
+        current = store.get_app(app["id"])
+        previous = current.get("current_sha") if current.get("current_sha") != sha else current.get("previous_sha")
+        return store.update_app(app["id"], {"current_sha": sha, "previous_sha": previous})
+
+    monkeypatch.setattr(releases, "install_release", lambda app, sha, src: env.calls.append(("install", sha, src)))
+    monkeypatch.setattr(releases, "activate", fake_activate)
+    monkeypatch.setattr(releases, "prune", lambda app: env.calls.append(("prune",)) or env.pruned)
+    monkeypatch.setattr(
+        deploy.health, "wait_healthy",
+        lambda port, path, timeout_s, interval_s: env.health_results.pop(0) if env.health_results else None,
+    )
+    return env
 
 
 def _deploy(data: bytes, sha256: str | None = None, commit: str = SHORT):
@@ -96,10 +121,12 @@ def test_successful_deploy(deploy_env):
     result = _deploy(_tarball(_manifest()))
 
     dep = result["deployment"]
-    assert dep["status"] == "activated"
+    assert dep["status"] == "healthy"
     assert dep["finished_at"] is not None
     assert dep["commit_sha"] == SHORT
-    assert deploy_env == [("install", SHORT, deploy_env[0][2]), ("activate", SHORT)]
+    assert [c[0] for c in deploy_env.calls] == ["install", "activate", "prune"]
+    # health path recorded from the manifest for later rollback verification
+    assert store.get_app(APP_ID)["health_path"] == "/healthz"
     # artifact retained, staging cleaned
     assert os.path.exists(os.path.join(deploy.ARTIFACTS_DIR, APP_ID, f"{SHORT}.tar.gz"))
     assert os.listdir(deploy.STAGING_DIR) == []
@@ -205,3 +232,91 @@ def test_concurrent_deploy_is_409(deploy_env):
     # lock released after a normal run too
     _deploy(_tarball(_manifest()))
     deploy._acquire_deploy_lock(APP_ID).release()
+
+
+# ── health / auto-rollback (Phase 5) ─────────────────────────────────────────
+
+def test_unhealthy_deploy_rolls_back_to_previous(deploy_env):
+    _make_app()
+    store.update_app(APP_ID, {"current_sha": "1111111"})  # a prior release is live
+    deploy_env.health_results.extend(["connection refused", None])  # new fails, rollback passes
+
+    with pytest.raises(HTTPException) as exc:
+        _deploy(_tarball(_manifest()))
+
+    assert exc.value.status_code == 502
+    dep = store.list_deployments(APP_ID)[0]
+    assert dep["status"] == "rolled_back"
+    assert "1111111" in dep["detail"]
+    # rolled back: activate called twice — new sha, then previous
+    activates = [c[1] for c in deploy_env.calls if c[0] == "activate"]
+    assert activates == [SHORT, "1111111"]
+    assert ("prune",) not in deploy_env.calls  # never prune on a failed deploy
+
+
+def test_unhealthy_rollback_health_still_failing_is_recorded(deploy_env):
+    _make_app()
+    store.update_app(APP_ID, {"current_sha": "1111111"})
+    deploy_env.health_results.extend(["HTTP 500 from /healthz", "HTTP 500 from /healthz"])
+
+    with pytest.raises(HTTPException):
+        _deploy(_tarball(_manifest()))
+
+    dep = store.list_deployments(APP_ID)[0]
+    assert dep["status"] == "rolled_back"
+    assert "rollback health also failing" in dep["detail"]
+
+
+def test_unhealthy_first_deploy_fails_without_rollback(deploy_env):
+    _make_app()  # no previous release
+    deploy_env.health_results.append("connection refused")
+
+    with pytest.raises(HTTPException) as exc:
+        _deploy(_tarball(_manifest()))
+
+    assert exc.value.status_code == 502
+    dep = store.list_deployments(APP_ID)[0]
+    assert dep["status"] == "failed"
+    assert "no previous release" in dep["detail"]
+    assert [c[1] for c in deploy_env.calls if c[0] == "activate"] == [SHORT]
+
+
+def test_rollback_failure_marks_failed_and_stops(deploy_env):
+    _make_app()
+    store.update_app(APP_ID, {"current_sha": "1111111"})
+    deploy_env.health_results.append("connection refused")
+
+    original_activate = releases.activate
+
+    def activate_then_break(app, sha):
+        result = original_activate(app, sha)
+        deploy_env.activate_error = RuntimeError("systemctl restart failed")  # arm for the rollback call
+        return result
+
+    releases.activate = activate_then_break
+    try:
+        with pytest.raises(HTTPException) as exc:
+            _deploy(_tarball(_manifest()))
+    finally:
+        releases.activate = original_activate
+
+    assert exc.value.status_code == 502
+    dep = store.list_deployments(APP_ID)[0]
+    assert dep["status"] == "failed"
+    assert "rollback to 1111111 also failed" in dep["detail"]
+
+
+def test_prune_removes_matching_artifacts(deploy_env):
+    _make_app()
+    deploy_env.pruned.extend(["aaaaaaa", "bbbbbbb"])
+    old_a = os.path.join(deploy.ARTIFACTS_DIR, APP_ID, "aaaaaaa.tar.gz")
+    os.makedirs(os.path.dirname(old_a), exist_ok=True)
+    for sha in ("aaaaaaa", "bbbbbbb"):
+        with open(os.path.join(deploy.ARTIFACTS_DIR, APP_ID, f"{sha}.tar.gz"), "wb") as f:
+            f.write(b"old artifact")
+
+    _deploy(_tarball(_manifest()))
+
+    assert not os.path.exists(old_a)
+    remaining = sorted(os.listdir(os.path.join(deploy.ARTIFACTS_DIR, APP_ID)))
+    assert remaining == [f"{SHORT}.tar.gz"]
