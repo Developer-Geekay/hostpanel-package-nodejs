@@ -114,6 +114,28 @@ def test_app_rows_never_expose_token_hash(fresh_db):
     assert "deploy_token_hash" not in store.get_app(APP_ID)
 
 
+def test_deploy_response_never_contains_env(deploy_env):
+    # The response is printed into CI logs, which are PUBLIC for public
+    # repos — env vars (MONGODB_URI, AUTH_SECRET, ...) must never appear.
+    # This shipped once as a live secret leak; keep this pinned.
+    store.create_app(
+        {
+            "id": APP_ID, "name": "Portfolio", "username": "geekay",
+            "domain": "example.com", "app_root": "/home/geekay/public_html",
+            "entrypoint": "server.js", "start_command": "node server.js",
+            "install_command": "", "node_version": "22", "port": 31000,
+        },
+        env={"AUTH_SECRET": "super-secret-value", "MONGODB_URI": "mongodb://u:p@127.0.0.1/db"},
+    )
+    store.update_app(APP_ID, {"deploy_enabled": True})
+
+    result = _deploy(_tarball(_manifest()))
+
+    assert "env" not in result["app"]
+    assert "super-secret-value" not in json.dumps(result)
+    assert set(result["app"].keys()) <= {"id", "name", "domain", "status", "current_sha", "previous_sha", "repo", "ref"}
+
+
 # ── pipeline ─────────────────────────────────────────────────────────────────
 
 def test_successful_deploy(deploy_env):
