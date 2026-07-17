@@ -20,6 +20,9 @@
     s.textContent = `
       .node-log-pre { font-family: var(--font-mono); font-size: 11px; color: var(--text-2); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; white-space: pre-wrap; overflow-y: auto; max-height: 400px; margin: 0; min-height: 250px; }
       .node-spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: currentColor; border-radius: 50%; animation: spin .65s linear infinite; vertical-align: middle; }
+      .node-snippet { font-family: var(--font-mono); font-size: 11px; color: var(--text-2); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; white-space: pre; overflow-x: auto; margin: 0; }
+      .chip-amber { background: rgba(245,158,11,0.12); color: #f59e0b; }
+      .chip-blue { background: rgba(59,130,246,0.12); color: #3b82f6; }
     `;
     document.head.appendChild(s);
   }
@@ -80,6 +83,17 @@
     const [logs, setLogs] = useState([]);
     const [logsLoading, setLogsLoading] = useState(false);
     const [metrics, setMetrics] = useState(null);
+
+    // Deploy tab state
+    const [deployInfo, setDeployInfo] = useState(null);       // GET /releases payload
+    const [deployments, setDeployments] = useState([]);
+    const [deployLoading, setDeployLoading] = useState(false);
+    const [deployError, setDeployError] = useState('');
+    const [deployRepo, setDeployRepo] = useState('');
+    const [deployRef, setDeployRef] = useState('refs/heads/main');
+    const [deployBusy, setDeployBusy] = useState(false);
+    const [rollbackTarget, setRollbackTarget] = useState(null); // { sha } | { sha: null } = previous
+    const [snippetCopied, setSnippetCopied] = useState(false);
 
     // Edit/Create form state
     const [formName, setFormName] = useState('');
@@ -154,11 +168,33 @@
       return () => clearInterval(iv);
     }, [selectedAppId, activeTab, fetchMetrics]);
 
+    // Deploy tab fetch — releases pointer + deployment history in one go.
+    // Degrades to an inline error; the rest of the panel keeps working.
+    const fetchDeployInfo = useCallback(async (appId) => {
+      setDeployLoading(true);
+      setDeployError('');
+      try {
+        const [releasesData, deploymentsData] = await Promise.all([
+          sdk.fetch('GET', '/cpanelapi/nodejs/apps/' + encodeURIComponent(appId) + '/releases'),
+          sdk.fetch('GET', '/cpanelapi/nodejs/apps/' + encodeURIComponent(appId) + '/deployments'),
+        ]);
+        setDeployInfo(releasesData || null);
+        setDeployments(deploymentsData || []);
+      } catch (e) {
+        setDeployError(e.message || 'Failed to load deployment data');
+      } finally {
+        setDeployLoading(false);
+      }
+    }, []);
+
     // Handle Active Tab Change
     const handleTabChange = (tabId) => {
       setActiveTab(tabId);
       if (tabId === 'logs' && activeApp) {
         fetchLogs(activeApp.id);
+      }
+      if (tabId === 'deploy' && activeApp) {
+        fetchDeployInfo(activeApp.id);
       }
     };
 
@@ -178,6 +214,12 @@
       setAddingNew(false);
       setActiveTab('control');
       setFormError('');
+      setDeployInfo(null);
+      setDeployments([]);
+      setDeployError('');
+      setDeployRepo(app.repo || '');
+      setDeployRef(app.ref || 'refs/heads/main');
+      setSnippetCopied(false);
 
       // Populate config form for Edit/Save
       setFormName(app.name);
@@ -328,6 +370,102 @@
       } catch (e) {
         toastErr(e.message || 'Deletion failed');
       }
+    };
+
+    // Save deploy settings (enable/disable + authorized source)
+    const handleDeploySettings = async (enabled) => {
+      if (!activeApp) return;
+      if (enabled && !deployRepo.trim()) {
+        setDeployError('Repository (owner/name) is required to enable push deploys');
+        return;
+      }
+      setDeployBusy(true);
+      setDeployError('');
+      try {
+        const body = { enabled };
+        if (deployRepo.trim()) { body.repo = deployRepo.trim(); body.ref = deployRef.trim() || 'refs/heads/main'; }
+        await sdk.fetch('POST', '/cpanelapi/nodejs/apps/' + encodeURIComponent(activeApp.id) + '/deploy-mode', body);
+        ok(enabled ? 'Push deploys enabled' : 'Push deploys disabled');
+        load(true);
+        fetchDeployInfo(activeApp.id);
+      } catch (e) {
+        setDeployError(e.message || 'Failed to update deploy settings');
+      } finally {
+        setDeployBusy(false);
+      }
+    };
+
+    // Rollback (to previous, or a specific retained SHA)
+    const handleRollback = async () => {
+      if (!activeApp || !rollbackTarget) return;
+      const sha = rollbackTarget.sha;
+      setRollbackTarget(null);
+      setDeployBusy(true);
+      try {
+        await sdk.fetch('POST', '/cpanelapi/nodejs/apps/' + encodeURIComponent(activeApp.id) + '/rollback', sha ? { sha } : undefined);
+        ok(sha ? `Rolled back to ${sha}` : 'Rolled back to previous release');
+        load(true);
+        fetchDeployInfo(activeApp.id);
+      } catch (e) {
+        toastErr(e.message || 'Rollback failed');
+      } finally {
+        setDeployBusy(false);
+      }
+    };
+
+    // The onboarding snippet — the app id is pre-filled, which is the point.
+    const workflowSnippet = useMemo(() => {
+      if (!activeApp) return '';
+      const branch = (deployRef || 'refs/heads/main').replace('refs/heads/', '') || 'main';
+      return [
+        'name: Deploy to HostPanel',
+        'on:',
+        '  push:',
+        `    branches: [${branch}]`,
+        '  workflow_dispatch:',
+        '',
+        'permissions:',
+        '  id-token: write',
+        '  contents: read',
+        '',
+        'jobs:',
+        '  deploy:',
+        '    uses: Developer-Geekay/hostpanel-package-nodejs/.github/workflows/node-deploy.yml@main',
+        '    with:',
+        `      app_id: ${activeApp.id}`,
+        '      artifact_paths: dist server.js package.json',
+        '    secrets:',
+        '      DEPLOY_URL: ${{ secrets.DEPLOY_URL }}',
+        '',
+      ].join('\n');
+    }, [activeApp, deployRef]);
+
+    const copySnippet = async () => {
+      try {
+        await navigator.clipboard.writeText(workflowSnippet);
+        setSnippetCopied(true);
+        setTimeout(() => setSnippetCopied(false), 2000);
+      } catch (e) {
+        toastErr('Copy failed — select the text manually');
+      }
+    };
+
+    const deploymentChip = (status) => {
+      if (status === 'healthy') return 'chip-green';
+      if (status === 'failed') return 'chip-red';
+      if (status === 'rolled_back') return 'chip-amber';
+      return 'chip-blue';
+    };
+
+    const formatDeployTime = (iso) => {
+      if (!iso) return '—';
+      return iso.replace('T', ' ').replace('Z', ' UTC');
+    };
+
+    const deployDuration = (dep) => {
+      if (!dep.started_at || !dep.finished_at) return '—';
+      const seconds = Math.max(0, Math.round((new Date(dep.finished_at) - new Date(dep.started_at)) / 1000));
+      return seconds + 's';
     };
 
     return html`
@@ -568,6 +706,7 @@
                 <div class="tab-bar" style=${{ borderBottom: '1px solid var(--border)', padding: '0 20px', flexShrink: 0 }}>
                   <button class=${'tab' + (activeTab === 'control' ? ' active' : '')} onClick=${() => handleTabChange('control')}>Control</button>
                   <button class=${'tab' + (activeTab === 'config' ? ' active' : '')} onClick=${() => handleTabChange('config')}>Configuration</button>
+                  <button class=${'tab' + (activeTab === 'deploy' ? ' active' : '')} onClick=${() => handleTabChange('deploy')}>Deploy</button>
                   <button class=${'tab' + (activeTab === 'logs' ? ' active' : '')} onClick=${() => handleTabChange('logs')}>Logs</button>
                   <button class=${'tab' + (activeTab === 'danger' ? ' active' : '')} onClick=${() => handleTabChange('danger')}>Danger Zone</button>
                 </div>
@@ -685,6 +824,124 @@
                     </form>
                   `}
 
+                  ${activeTab === 'deploy' && html`
+                    <div class="animate-fade-in" style=${{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+                      ${deployError && html`<div style=${{ color: 'var(--err)', fontSize: 12 }}>${deployError}</div>`}
+
+                      <!-- Deploy settings: enable toggle + authorized source -->
+                      <div class="card" style=${{ padding: 16 }}>
+                        <div style=${{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                          <div style=${{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)' }}>🚀 Push Deploys (GitHub Actions)</div>
+                          <span class=${'chip ' + (activeApp.deploy_enabled ? 'chip-green' : 'chip-red')}>
+                            ${activeApp.deploy_enabled ? 'enabled' : 'disabled'}
+                          </span>
+                        </div>
+                        <p style=${{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5, margin: '0 0 14px' }}>
+                          Every push to the authorized branch builds on GitHub's runners and ships here —
+                          verified by GitHub's signed identity (OIDC), health-checked, and rolled back
+                          automatically if the new build doesn't come up. No credentials are stored anywhere.
+                        </p>
+                        <div style=${{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                          <div class="field">
+                            <label>Authorized Repository</label>
+                            <input type="text" value=${deployRepo} placeholder="owner/name" onInput=${e => setDeployRepo(e.target.value)} />
+                          </div>
+                          <div class="field">
+                            <label>Authorized Ref</label>
+                            <input type="text" value=${deployRef} placeholder="refs/heads/main" onInput=${e => setDeployRef(e.target.value)} />
+                          </div>
+                        </div>
+                        <div style=${{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 6 }}>
+                          ${activeApp.deploy_enabled && html`
+                            <button class="btn btn-outline btn-sm" disabled=${deployBusy} onClick=${() => handleDeploySettings(false)}>
+                              Disable Push Deploys
+                            </button>
+                          `}
+                          <button class="btn btn-primary btn-sm" disabled=${deployBusy} onClick=${() => handleDeploySettings(true)}>
+                            ${deployBusy ? html`<span class="node-spin" /> Saving…` : activeApp.deploy_enabled ? 'Save Source' : 'Enable Push Deploys'}
+                          </button>
+                        </div>
+                      </div>
+
+                      ${activeApp.deploy_enabled && html`
+                        <!-- Current release + rollback -->
+                        <div class="card" style=${{ padding: 16 }}>
+                          <div style=${{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                            <div style=${{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)' }}>📦 Releases</div>
+                            <button class="btn btn-ghost btn-xs" onClick=${() => fetchDeployInfo(activeApp.id)} disabled=${deployLoading}>
+                              ${deployLoading ? 'Refreshing…' : '⟳ Refresh'}
+                            </button>
+                          </div>
+                          <div style=${{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                            <div class="stat-card">
+                              <div class="stat-label">Current</div>
+                              <div class="stat-value mono" style=${{ fontSize: 16 }}>${deployInfo?.current_sha || activeApp.current_sha || '—'}</div>
+                              <div class="stat-sub">live release</div>
+                            </div>
+                            <div class="stat-card">
+                              <div class="stat-label">Previous</div>
+                              <div class="stat-value mono" style=${{ fontSize: 16 }}>${deployInfo?.previous_sha || activeApp.previous_sha || '—'}</div>
+                              <div class="stat-sub">one-click rollback target</div>
+                            </div>
+                          </div>
+                          <div style=${{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <button
+                              class="btn btn-outline btn-sm"
+                              disabled=${deployBusy || !(deployInfo?.previous_sha || activeApp.previous_sha)}
+                              onClick=${() => setRollbackTarget({ sha: null })}
+                            >↩ Roll Back to Previous</button>
+                            ${(deployInfo?.releases || []).filter(sha => sha !== (deployInfo?.current_sha || activeApp.current_sha)).map(sha => html`
+                              <button key=${sha} class="btn btn-ghost btn-xs mono" disabled=${deployBusy} onClick=${() => setRollbackTarget({ sha })} title=${'Roll back to ' + sha}>
+                                ${sha}
+                              </button>
+                            `)}
+                          </div>
+                        </div>
+
+                        <!-- Deployment history -->
+                        <div class="card" style=${{ padding: 16 }}>
+                          <div style=${{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 12 }}>🕘 Deployment History</div>
+                          ${deployLoading && deployments.length === 0
+                            ? html`<div style=${{ color: 'var(--text-3)', fontSize: 12 }}>Loading…</div>`
+                            : deployments.length === 0
+                              ? html`<div style=${{ color: 'var(--text-3)', fontSize: 12 }}>No deployments yet — push to the authorized branch, or copy the workflow below to get started.</div>`
+                              : html`
+                                <div style=${{ display: 'grid', gap: 6 }}>
+                                  ${deployments.map(dep => html`
+                                    <div key=${dep.id} style=${{ display: 'flex', alignItems: 'center', gap: 12, padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
+                                      <span class="mono" style=${{ fontSize: 12, color: 'var(--text-2)', width: 70, flexShrink: 0 }}>${(dep.commit_sha || '').slice(0, 7)}</span>
+                                      <span class=${'chip ' + deploymentChip(dep.status)} style=${{ fontSize: 10, flexShrink: 0 }}>${dep.status}</span>
+                                      <span style=${{ fontSize: 11.5, color: 'var(--text-3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title=${dep.detail || ''}>
+                                        ${dep.detail || ''}
+                                      </span>
+                                      <span style=${{ fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>${deployDuration(dep)}</span>
+                                      <span class="mono" style=${{ fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>${formatDeployTime(dep.started_at)}</span>
+                                    </div>
+                                  `)}
+                                </div>
+                              `}
+                        </div>
+
+                        <!-- Onboarding: workflow snippet with the real app id -->
+                        <div class="card" style=${{ padding: 16 }}>
+                          <div style=${{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                            <div style=${{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)' }}>📋 GitHub Workflow</div>
+                            <button class="btn btn-outline btn-xs" onClick=${copySnippet}>
+                              ${snippetCopied ? '✓ Copied' : 'Copy'}
+                            </button>
+                          </div>
+                          <p style=${{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
+                            Save as <span class="mono">.github/workflows/deploy.yml</span> in the authorized repository,
+                            and add one repo secret: <span class="mono">DEPLOY_URL</span> = this panel's origin.
+                            Adjust <span class="mono">artifact_paths</span> to what your build actually needs at runtime.
+                          </p>
+                          <pre class="node-snippet">${workflowSnippet}</pre>
+                        </div>
+                      `}
+                    </div>
+                  `}
+
                   ${activeTab === 'logs' && html`
                     <div class="animate-fade-in" style=${{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                       <div style=${{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -729,6 +986,19 @@
             danger=${true}
             onClose=${() => setDeleteTarget(null)}
             onConfirm=${handleDeleteApp}
+          />
+        `}
+
+        ${rollbackTarget && activeApp && html`
+          <${SdkConfirmModal}
+            open=${true}
+            title="Roll Back Release"
+            message=${rollbackTarget.sha
+              ? `Roll "${activeApp.name}" back to release ${rollbackTarget.sha}? The app restarts on that release immediately.`
+              : `Roll "${activeApp.name}" back to the previous release (${deployInfo?.previous_sha || activeApp.previous_sha || '—'})? The app restarts on it immediately.`}
+            danger=${true}
+            onClose=${() => setRollbackTarget(null)}
+            onConfirm=${handleRollback}
           />
         `}
       </div>
