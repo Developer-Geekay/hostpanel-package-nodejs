@@ -220,6 +220,20 @@ git push origin v1.0.0
 
 The GitHub workflow builds and publishes the matching zip.
 
+## Custom Reverse Proxy Routes
+
+Apps sometimes front more than one local service on the same domain (e.g. `/assistant-api`
+proxied to a FastAPI backend on port 16000). Hand-editing the generated nginx vhost doesn't
+survive regeneration — the plugin re-syncs vhosts on config save, restart, and startup.
+
+Instead, declare routes in the app's **Configuration** tab (Custom Reverse Proxy Routes):
+path prefix → loopback port, with an optional "strip prefix". They're stored in the DB
+(`nodejs_app_routes`) and the core vhost renderer (core ≥ 1.2.0) emits a `location` block per
+route ahead of the app's catch-all — so saving configuration *produces* the custom block
+instead of erasing it. Validation is enforced on write (plugin) **and** re-checked on read
+(core renderer): path segments limited to `[A-Za-z0-9._-]`, loopback upstreams only, max 10
+routes, `/.well-known` reserved.
+
 ## Operational Notes
 
 - Allowed application port range is `31000-31999`.

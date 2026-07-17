@@ -104,6 +104,7 @@
     const [formEntrypoint, setFormEntrypoint] = useState('server.js');
     const [formStartCommand, setFormStartCommand] = useState('');
     const [formEnvRows, setFormEnvRows] = useState([{ key: '', value: '' }]);
+    const [formRoutes, setFormRoutes] = useState([]);
     const [formBusy, setFormBusy] = useState(false);
     const [formError, setFormError] = useState('');
 
@@ -230,6 +231,7 @@
       setFormEntrypoint(app.entrypoint);
       setFormStartCommand(app.start_command || '');
       setFormEnvRows(envToRows(app.env));
+      setFormRoutes((app.routes || []).map(r => ({ ...r })));
     };
 
     // Trigger "+ Add Application" View
@@ -271,6 +273,16 @@
     const removeEnvRow = (index) => {
       setFormEnvRows(rows => rows.filter((_, i) => i !== index));
     };
+
+    // Custom proxy route row helpers
+    const updateRoute = (index, field, value) => {
+      setFormRoutes(rows => rows.map((row, i) => i === index ? { ...row, [field]: value } : row));
+    };
+    const addRoute = () => setFormRoutes(rows => rows.concat({ path: '', port: '', strip_prefix: true }));
+    const removeRoute = (index) => setFormRoutes(rows => rows.filter((_, i) => i !== index));
+    const routesPayload = () => formRoutes
+      .filter(r => String(r.path || '').trim())
+      .map(r => ({ path: String(r.path).trim(), port: Number(r.port), strip_prefix: !!r.strip_prefix }));
 
     // Action Handlers
     const handlePowerAction = async (app, actionName) => {
@@ -347,6 +359,7 @@
           entrypoint: formEntrypoint.trim(),
           start_command: formStartCommand.trim(),
           env: rowsToEnv(formEnvRows),
+          routes: routesPayload(),
         };
         await sdk.fetch('PUT', '/cpanelapi/nodejs/apps/' + encodeURIComponent(activeApp.id), values);
         ok('Node.js application configuration saved');
@@ -812,6 +825,34 @@
                             </div>
                           `)}
                         </div>
+                      </div>
+
+                      <!-- Custom Reverse Proxy Routes -->
+                      <div style=${{ gridColumn: '1 / -1', marginTop: 8 }}>
+                        <div style=${{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <span class="section-label" style=${{ margin: 0, border: 'none' }}>Custom Reverse Proxy Routes</span>
+                          <button type="button" class="btn btn-ghost btn-xs" onClick=${addRoute}>+ Add Route</button>
+                        </div>
+                        <p style=${{ fontSize: 11.5, color: 'var(--text-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
+                          Extra path prefixes served by other local services (e.g. <span class="mono">/assistant-api</span> → port 16000).
+                          Written into this domain's nginx vhost on every save — they survive regeneration, unlike hand edits.
+                          "Strip prefix" removes the path prefix before forwarding.
+                        </p>
+                        ${formRoutes.length === 0
+                          ? html`<div style=${{ fontSize: 11.5, color: 'var(--text-3)' }}>No custom routes.</div>`
+                          : html`<div style=${{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              ${formRoutes.map((route, index) => html`
+                                <div key=${index} style=${{ display: 'grid', gridTemplateColumns: '2fr 1fr auto auto', gap: 10, alignItems: 'center' }}>
+                                  <input type="text" value=${route.path} placeholder="/assistant-api" onInput=${e => updateRoute(index, 'path', e.target.value)} />
+                                  <input type="number" min="1" max="65535" value=${route.port} placeholder="16000" onInput=${e => updateRoute(index, 'port', e.target.value)} />
+                                  <label style=${{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+                                    <input type="checkbox" checked=${route.strip_prefix} onChange=${e => updateRoute(index, 'strip_prefix', e.target.checked)} />
+                                    Strip prefix
+                                  </label>
+                                  <button type="button" class="btn btn-ghost btn-xs" onClick=${() => removeRoute(index)}>Remove</button>
+                                </div>
+                              `)}
+                            </div>`}
                       </div>
 
                       ${formError && html`<div style=${{ gridColumn: '1 / -1', color: 'var(--err)', fontSize: 12 }}>${formError}</div>`}

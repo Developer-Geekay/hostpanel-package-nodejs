@@ -35,6 +35,7 @@ class NodeAppCreateRequest(BaseModel):
     node_version: str = Field(default="22")
     port: int
     env: dict[str, str] = Field(default_factory=dict)
+    routes: list[dict] = Field(default_factory=list, description="custom reverse-proxy routes: {path, port, strip_prefix}")
 
 
 class NodeAppUpdateRequest(BaseModel):
@@ -46,6 +47,7 @@ class NodeAppUpdateRequest(BaseModel):
     node_version: Optional[str] = None
     port: Optional[int] = None
     env: Optional[dict[str, str]] = None
+    routes: Optional[list[dict]] = None
 
 
 def _ensure_app_access(app: dict, current_user: User) -> None:
@@ -130,7 +132,11 @@ async def get_app(app_id: str, current_user: User = Depends(get_current_user)):
 @router.post("/apps")
 async def create_app(request: NodeAppCreateRequest, current_user: User = Depends(get_current_user)):
     data, env = _build_app_data(request, current_user)
+    routes = validators.validate_routes(request.routes)
     app = store.create_app(data, env)
+    if routes:
+        store.set_routes(app["id"], routes)
+        app = store.get_app(app["id"]) or app
     audit.log_action(current_user, "nodejs.app_create", app["id"], {"domain": app["domain"], "port": app["port"]})
     try:
         process.ensure_app_directory(app)
@@ -177,13 +183,17 @@ async def update_app(app_id: str, request: NodeAppUpdateRequest, current_user: U
     }
     env = validators.validate_env(request.env) if request.env is not None else None
     updated = store.update_app(app_id, patch, env=env)
+    if request.routes is not None:
+        store.set_routes(app_id, validators.validate_routes(request.routes))
+        updated = store.get_app(app_id) or updated
     process.write_service(updated)
     if existing["domain"] != updated["domain"]:
         nginx.sync_vhost(existing["domain"], existing["username"])
     ssl_enabled = nginx.sync_vhost(updated["domain"], updated["username"])
     updated = store.update_app(app_id, {"ssl_enabled": ssl_enabled})
     process.restart(app_id)
-    audit.log_action(current_user, "nodejs.app_update", app_id, {"domain": updated["domain"], "port": updated["port"]})
+    audit.log_action(current_user, "nodejs.app_update", app_id,
+                     {"domain": updated["domain"], "port": updated["port"], "routes": len(updated.get("routes") or [])})
     return updated
 
 
