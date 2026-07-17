@@ -250,7 +250,7 @@ def _verify_or_rollback(
             {"deployment_id": deployment_id, "commit": commit, "sha": short_sha},
         )
         _prune_retained(app)
-        return {"deployment": store.get_deployment(deployment_id), "app": store.get_app(app["id"])}
+        return {"deployment": store.get_deployment(deployment_id), "app": _ci_safe_app(store.get_app(app["id"]))}
 
     previous_sha = updated_app.get("previous_sha")
     if not previous_sha:
@@ -281,6 +281,18 @@ def _verify_or_rollback(
                      {"deployment_id": deployment_id, "commit": commit, "rolled_back_to": previous_sha,
                       "reason": failure}, status="failed")
     raise HTTPException(status_code=502, detail=detail)
+
+
+def _ci_safe_app(app: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """The deploy response ends up in CI logs — which are public for public
+    repos. Return only what CI legitimately needs to display; never env
+    contents or anything else an operator typed into the panel."""
+    if not app:
+        return None
+    return {
+        key: app.get(key)
+        for key in ("id", "name", "domain", "status", "current_sha", "previous_sha", "repo", "ref")
+    }
 
 
 def _prune_retained(app: dict[str, Any]) -> None:

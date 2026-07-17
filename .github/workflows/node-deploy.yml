@@ -154,5 +154,10 @@ jobs:
             -F "sha256=${sha256}" \
             -F "commit=${COMMIT_SHA}")"
           echo "HTTP ${http_code}"
-          cat "${RUNNER_TEMP}/deploy-response.json"; echo
+          # Print status fields only — never the raw response. These logs are
+          # public on public repos, and the response must be assumed to carry
+          # operator data.
+          jq -r '"deployment: \(.deployment.id // "n/a") \(.deployment.status // .detail // "unknown")",
+                 "release: \(.app.current_sha // "n/a") (previous: \(.app.previous_sha // "none"))"' \
+            "${RUNNER_TEMP}/deploy-response.json" 2>/dev/null || echo "(response was not JSON)"
           test "${http_code}" = "200"
