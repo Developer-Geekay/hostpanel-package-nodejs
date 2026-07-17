@@ -172,6 +172,17 @@ Landed in Phase 5 (health checks, auto-rollback, retention):
 - Deploys report `healthy`/`rolled_back`/`failed` truthfully to CI: only `healthy`
   returns 200, so a bad build shows up as a red run even though the site self-recovered.
 
+Landed in Phase 7 (panel Deploy tab):
+
+- Each app gains a **Deploy** tab in the Node.js panel: enable/disable push deploys, set the
+  authorized `repo`/`ref`, see current/previous release SHAs, browse deployment history
+  (commit, status, duration, timestamp, failure detail), roll back — to previous or any
+  retained SHA — with a confirmation modal, and copy the GitHub workflow snippet with the
+  app's real id pre-filled (that snippet is the onboarding flow).
+- The tab degrades gracefully: fetch failures show an inline error and the rest of the panel
+  keeps working; deploys never depend on the UI.
+- Deploy-mode changes and rollbacks are admin-only (enforced server-side) and audit-logged.
+
 Phase 1 manual flow (until GitHub Actions takes over in Phases 2–3):
 
 1. Back up the app's unit file (`/etc/systemd/system/hostpanel-nodejs-<app_id>.service`) —
