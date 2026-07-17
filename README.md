@@ -158,6 +158,20 @@ Landed in Phase 4 (GitHub OIDC — no stored credentials):
   credential material. (The legacy `deploy_token_hash` DB column remains, unused — dropping
   SQLite columns isn't worth the risk.)
 
+Landed in Phase 5 (health checks, auto-rollback, retention):
+
+- After activation the deploy polls `http://127.0.0.1:<port><manifest.health>` every
+  `health_interval_s` (default 2 s) up to `health_timeout_s` (default 30 s). Healthy →
+  deployment ends `healthy`. Unhealthy → automatic rollback to `previous`, restart,
+  re-verify, deployment ends `rolled_back`, and the CI run fails with `502` + the reason.
+  If the rollback itself fails (or no previous release exists on a first deploy), the
+  deployment ends `failed` and nothing loops.
+- Retention: after every healthy deploy, release dirs beyond `keep_releases` (default 5)
+  are pruned oldest-first — the releases behind `current` and `previous` are never pruned
+  regardless of age — and each pruned release's retained tarball is deleted with it.
+- Deploys report `healthy`/`rolled_back`/`failed` truthfully to CI: only `healthy`
+  returns 200, so a bad build shows up as a red run even though the site self-recovered.
+
 Phase 1 manual flow (until GitHub Actions takes over in Phases 2–3):
 
 1. Back up the app's unit file (`/etc/systemd/system/hostpanel-nodejs-<app_id>.service`) —

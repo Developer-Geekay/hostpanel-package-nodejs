@@ -120,6 +120,19 @@ def activate(app: dict[str, Any], sha: str) -> dict[str, Any]:
     return store.update_app(app["id"], {"current_sha": sha, "previous_sha": previous_sha})
 
 
+def prune(app: dict[str, Any]) -> list[str]:
+    """Keep the newest `keep_releases` release dirs; the releases behind
+    `current` and `previous` survive regardless of age. Returns the pruned
+    SHAs so the caller can drop their artifacts too."""
+    keep = max(int(app.get("keep_releases") or 5), 1)
+    result = _helper(["prune", app["app_root"], str(keep)], timeout=60)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "unknown error").strip()
+        store.add_log(app["id"], "warning", f"Release pruning failed: {detail}")
+        return []
+    return [line.strip() for line in (result.stdout or "").splitlines() if SHA_RE.fullmatch(line.strip())]
+
+
 def rollback(app: dict[str, Any], to_sha: Optional[str] = None) -> dict[str, Any]:
     target = to_sha or app.get("previous_sha")
     if not target:

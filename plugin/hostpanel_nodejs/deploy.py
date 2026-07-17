@@ -13,7 +13,7 @@ from typing import Any, BinaryIO, Optional
 
 from fastapi import HTTPException
 
-from hostpanel_nodejs import audit, ids, releases, store
+from hostpanel_nodejs import audit, health, ids, releases, store
 from hostpanel_nodejs.process import PLUGIN_DIR
 
 # Tarball ingest pipeline (Phase 2 of DEPLOY_PLAN.md):
@@ -220,19 +220,73 @@ def _run_deploy_locked(app: dict[str, Any], upload: BinaryIO, expected_sha256: s
 
         releases.install_release(app, short_sha, staged_dir)
         updated_app = releases.activate(app, short_sha)
-        store.set_deployment_status(
-            deployment_id, "activated",
-            detail="activated; health verification arrives in Phase 5",
-            finished=True,
-        )
-        audit.log_action(
-            CI_ACTOR, "nodejs.deploy", app["id"],
-            {"deployment_id": deployment_id, "commit": commit, "sha": short_sha},
-        )
-        return {"deployment": store.get_deployment(deployment_id), "app": updated_app}
+        store.update_app(app["id"], {"health_path": manifest["health"]})
+        store.set_deployment_status(deployment_id, "activated")
     except HTTPException as exc:
         raise fail(exc)
     except tarfile.TarError as exc:
         raise fail(HTTPException(status_code=400, detail=f"Invalid tarball: {exc}"))
     finally:
         shutil.rmtree(staged_dir, ignore_errors=True)
+
+    return _verify_or_rollback(app, deployment_id, commit, short_sha, manifest["health"], updated_app)
+
+
+def _verify_or_rollback(
+    app: dict[str, Any], deployment_id: str, commit: str, short_sha: str,
+    health_path: str, updated_app: dict[str, Any],
+) -> dict[str, Any]:
+    """The release is live; decide healthy / rolled_back / failed. Never loop:
+    one rollback attempt, and if that fails too, stop loudly with current
+    left where it is."""
+    failure = health.wait_healthy(
+        int(app["port"]), health_path,
+        int(app.get("health_timeout_s") or 30), int(app.get("health_interval_s") or 2),
+    )
+    if failure is None:
+        store.set_deployment_status(deployment_id, "healthy")
+        audit.log_action(
+            CI_ACTOR, "nodejs.deploy", app["id"],
+            {"deployment_id": deployment_id, "commit": commit, "sha": short_sha},
+        )
+        _prune_retained(app)
+        return {"deployment": store.get_deployment(deployment_id), "app": store.get_app(app["id"])}
+
+    previous_sha = updated_app.get("previous_sha")
+    if not previous_sha:
+        detail = f"health check failed ({failure}) and no previous release exists to roll back to"
+        store.set_deployment_status(deployment_id, "failed", detail=detail)
+        audit.log_action(CI_ACTOR, "nodejs.deploy", app["id"],
+                         {"deployment_id": deployment_id, "commit": commit, "error": detail}, status="failed")
+        raise HTTPException(status_code=502, detail=detail)
+
+    try:
+        releases.activate(store.get_app(app["id"]), previous_sha)
+    except Exception as exc:
+        detail = f"health check failed ({failure}); rollback to {previous_sha} also failed: {exc}"
+        store.set_deployment_status(deployment_id, "failed", detail=detail)
+        audit.log_action(CI_ACTOR, "nodejs.deploy", app["id"],
+                         {"deployment_id": deployment_id, "commit": commit, "error": detail}, status="failed")
+        raise HTTPException(status_code=502, detail=detail)
+
+    refailure = health.wait_healthy(
+        int(app["port"]), app.get("health_path") or health_path,
+        int(app.get("health_timeout_s") or 30), int(app.get("health_interval_s") or 2),
+    )
+    detail = f"health check failed ({failure}); rolled back to {previous_sha}" + (
+        "" if refailure is None else f" — rollback health also failing: {refailure}"
+    )
+    store.set_deployment_status(deployment_id, "rolled_back", detail=detail)
+    audit.log_action(CI_ACTOR, "nodejs.deploy_rollback", app["id"],
+                     {"deployment_id": deployment_id, "commit": commit, "rolled_back_to": previous_sha,
+                      "reason": failure}, status="failed")
+    raise HTTPException(status_code=502, detail=detail)
+
+
+def _prune_retained(app: dict[str, Any]) -> None:
+    fresh = store.get_app(app["id"]) or app
+    for sha in releases.prune(fresh):
+        artifact = os.path.join(ARTIFACTS_DIR, app["id"], f"{sha}.tar.gz")
+        if os.path.exists(artifact):
+            os.remove(artifact)
+        audit.log_action(CI_ACTOR, "nodejs.release_prune", app["id"], {"sha": sha})
