@@ -74,6 +74,14 @@ def migrate() -> None:
               created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS nodejs_app_routes (
+              app_id TEXT NOT NULL,
+              path TEXT NOT NULL,
+              port INTEGER NOT NULL,
+              strip_prefix INTEGER NOT NULL DEFAULT 1,
+              PRIMARY KEY (app_id, path)
+            );
+
             CREATE TABLE IF NOT EXISTS nodejs_deployments (
               id TEXT PRIMARY KEY,
               app_id TEXT NOT NULL REFERENCES nodejs_apps(id),
@@ -102,6 +110,7 @@ def _row_to_app(row: Any) -> dict[str, Any]:
     # material (even hashes) through the API.
     app.pop("deploy_token_hash", None)
     app["env"] = get_env(app["id"])
+    app["routes"] = get_routes(app["id"])
     return app
 
 
@@ -215,6 +224,7 @@ def delete_app(app_id: str) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM nodejs_app_env WHERE app_id=?", (app_id,))
         conn.execute("DELETE FROM nodejs_app_logs WHERE app_id=?", (app_id,))
+        conn.execute("DELETE FROM nodejs_app_routes WHERE app_id=?", (app_id,))
         # Deployment rows go with the app (FK requires it); the durable history
         # of every deploy lives in the core audit_log, which is never pruned here.
         conn.execute("DELETE FROM nodejs_deployments WHERE app_id=?", (app_id,))
@@ -231,6 +241,35 @@ def get_env(app_id: str) -> dict[str, str]:
     with get_conn() as conn:
         rows = conn.execute("SELECT key, value FROM nodejs_app_env WHERE app_id=? ORDER BY key", (app_id,)).fetchall()
     return {row["key"]: row["value"] for row in rows}
+
+
+def get_routes(app_id: str) -> list[dict[str, Any]]:
+    migrate()
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT path, port, strip_prefix FROM nodejs_app_routes WHERE app_id=? ORDER BY path",
+            (app_id,),
+        ).fetchall()
+    return [{"path": r["path"], "port": r["port"], "strip_prefix": bool(r["strip_prefix"])} for r in rows]
+
+
+def get_routes_by_domain(domain: str) -> list[dict[str, Any]]:
+    """Called by the core vhost renderer (nginx_vhost._nodejs_routes)."""
+    migrate()
+    with get_conn() as conn:
+        row = conn.execute("SELECT id FROM nodejs_apps WHERE domain=?", (domain,)).fetchone()
+    return get_routes(row["id"]) if row else []
+
+
+def set_routes(app_id: str, routes: list[dict[str, Any]]) -> None:
+    migrate()
+    with get_conn() as conn:
+        conn.execute("DELETE FROM nodejs_app_routes WHERE app_id=?", (app_id,))
+        for route in routes:
+            conn.execute(
+                "INSERT INTO nodejs_app_routes (app_id, path, port, strip_prefix) VALUES (?,?,?,?)",
+                (app_id, route["path"], int(route["port"]), int(bool(route.get("strip_prefix", True)))),
+            )
 
 
 def add_log(app_id: str, level: str, message: str) -> None:

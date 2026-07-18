@@ -172,6 +172,39 @@ def validate_env(env: Optional[dict[str, str]]) -> dict[str, str]:
     return clean
 
 
+ROUTE_PATH_RE = re.compile(r"^(/[A-Za-z0-9._-]+)+$")
+MAX_ROUTES = 10
+# Prefixes the app itself must keep serving.
+RESERVED_ROUTE_PREFIXES = ("/.well-known",)
+
+
+def validate_routes(routes: Optional[list[dict]]) -> list[dict]:
+    """Custom reverse-proxy routes: path prefix -> loopback port. Keep in
+    sync with the core renderer's read-side whitelist (nginx_vhost) — the
+    shape must be un-injectable into nginx config by construction."""
+    clean: list[dict] = []
+    seen: set[str] = set()
+    for route in routes or []:
+        path = str(route.get("path") or "").strip().rstrip("/")
+        if not ROUTE_PATH_RE.fullmatch(path) or ".." in path or len(path) > 128:
+            raise HTTPException(status_code=400, detail=f"Invalid route path: {path or '(empty)'} — use segments of letters, digits, dot, dash, underscore")
+        if any(path == p or path.startswith(p + "/") for p in RESERVED_ROUTE_PREFIXES):
+            raise HTTPException(status_code=400, detail=f"Route path {path} is reserved")
+        if path in seen:
+            raise HTTPException(status_code=409, detail=f"Duplicate route path: {path}")
+        seen.add(path)
+        try:
+            port = int(route.get("port"))
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid port for route {path}")
+        if not (1 <= port <= 65535):
+            raise HTTPException(status_code=400, detail=f"Route port must be 1-65535 (got {port})")
+        clean.append({"path": path, "port": port, "strip_prefix": bool(route.get("strip_prefix", True))})
+    if len(clean) > MAX_ROUTES:
+        raise HTTPException(status_code=400, detail=f"At most {MAX_ROUTES} custom routes per application")
+    return clean
+
+
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REF_RE = re.compile(r"^refs/[A-Za-z0-9_./-]+$")
 
