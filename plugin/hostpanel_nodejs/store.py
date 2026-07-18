@@ -100,6 +100,9 @@ def migrate() -> None:
         for name, definition in _DEPLOY_APP_COLUMNS:
             if name not in existing:
                 conn.execute(f"ALTER TABLE nodejs_apps ADD COLUMN {name} {definition}")
+        route_cols = {row["name"] for row in conn.execute("PRAGMA table_info(nodejs_app_routes)")}
+        if "host" not in route_cols:
+            conn.execute("ALTER TABLE nodejs_app_routes ADD COLUMN host TEXT NOT NULL DEFAULT '127.0.0.1'")
 
 
 def _row_to_app(row: Any) -> dict[str, Any]:
@@ -247,10 +250,13 @@ def get_routes(app_id: str) -> list[dict[str, Any]]:
     migrate()
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT path, port, strip_prefix FROM nodejs_app_routes WHERE app_id=? ORDER BY path",
+            "SELECT path, host, port, strip_prefix FROM nodejs_app_routes WHERE app_id=? ORDER BY path",
             (app_id,),
         ).fetchall()
-    return [{"path": r["path"], "port": r["port"], "strip_prefix": bool(r["strip_prefix"])} for r in rows]
+    return [
+        {"path": r["path"], "host": r["host"] or "127.0.0.1", "port": r["port"], "strip_prefix": bool(r["strip_prefix"])}
+        for r in rows
+    ]
 
 
 def get_routes_by_domain(domain: str) -> list[dict[str, Any]]:
@@ -267,8 +273,9 @@ def set_routes(app_id: str, routes: list[dict[str, Any]]) -> None:
         conn.execute("DELETE FROM nodejs_app_routes WHERE app_id=?", (app_id,))
         for route in routes:
             conn.execute(
-                "INSERT INTO nodejs_app_routes (app_id, path, port, strip_prefix) VALUES (?,?,?,?)",
-                (app_id, route["path"], int(route["port"]), int(bool(route.get("strip_prefix", True)))),
+                "INSERT INTO nodejs_app_routes (app_id, path, host, port, strip_prefix) VALUES (?,?,?,?,?)",
+                (app_id, route["path"], route.get("host") or "127.0.0.1",
+                 int(route["port"]), int(bool(route.get("strip_prefix", True)))),
             )
 
 
