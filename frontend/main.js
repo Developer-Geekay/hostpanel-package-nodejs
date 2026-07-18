@@ -278,11 +278,16 @@
     const updateRoute = (index, field, value) => {
       setFormRoutes(rows => rows.map((row, i) => i === index ? { ...row, [field]: value } : row));
     };
-    const addRoute = () => setFormRoutes(rows => rows.concat({ path: '', port: '', strip_prefix: true }));
+    const addRoute = () => setFormRoutes(rows => rows.concat({ path: '', host: '', port: '', strip_prefix: true }));
     const removeRoute = (index) => setFormRoutes(rows => rows.filter((_, i) => i !== index));
     const routesPayload = () => formRoutes
       .filter(r => String(r.path || '').trim())
-      .map(r => ({ path: String(r.path).trim(), port: Number(r.port), strip_prefix: !!r.strip_prefix }));
+      .map(r => ({
+        path: String(r.path).trim(),
+        host: String(r.host || '').trim() || '127.0.0.1',
+        port: Number(r.port),
+        strip_prefix: !!r.strip_prefix,
+      }));
 
     // Action Handlers
     const handlePowerAction = async (app, actionName) => {
@@ -834,7 +839,8 @@
                           <button type="button" class="btn btn-ghost btn-xs" onClick=${addRoute}>+ Add Route</button>
                         </div>
                         <p style=${{ fontSize: 11.5, color: 'var(--text-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
-                          Extra path prefixes served by other local services (e.g. <span class="mono">/assistant-api</span> → port 16000).
+                          Extra path prefixes proxied to other services (e.g. <span class="mono">/assistant-api</span> → <span class="mono">127.0.0.1:16000</span>).
+                          Host defaults to this server (<span class="mono">127.0.0.1</span>); use a LAN IP or hostname for services on other machines.
                           Written into this domain's nginx vhost on every save — they survive regeneration, unlike hand edits.
                           "Strip prefix" removes the path prefix before forwarding.
                         </p>
@@ -842,8 +848,9 @@
                           ? html`<div style=${{ fontSize: 11.5, color: 'var(--text-3)' }}>No custom routes.</div>`
                           : html`<div style=${{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                               ${formRoutes.map((route, index) => html`
-                                <div key=${index} style=${{ display: 'grid', gridTemplateColumns: '2fr 1fr auto auto', gap: 10, alignItems: 'center' }}>
+                                <div key=${index} style=${{ display: 'grid', gridTemplateColumns: '2fr 1.4fr 0.8fr auto auto', gap: 10, alignItems: 'center' }}>
                                   <input type="text" value=${route.path} placeholder="/assistant-api" onInput=${e => updateRoute(index, 'path', e.target.value)} />
+                                  <input type="text" value=${route.host || ''} placeholder="127.0.0.1" onInput=${e => updateRoute(index, 'host', e.target.value)} />
                                   <input type="number" min="1" max="65535" value=${route.port} placeholder="16000" onInput=${e => updateRoute(index, 'port', e.target.value)} />
                                   <label style=${{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
                                     <input type="checkbox" checked=${route.strip_prefix} onChange=${e => updateRoute(index, 'strip_prefix', e.target.checked)} />

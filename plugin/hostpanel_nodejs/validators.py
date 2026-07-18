@@ -173,6 +173,7 @@ def validate_env(env: Optional[dict[str, str]]) -> dict[str, str]:
 
 
 ROUTE_PATH_RE = re.compile(r"^(/[A-Za-z0-9._-]+)+$")
+ROUTE_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 MAX_ROUTES = 10
 # Prefixes the app itself must keep serving.
 RESERVED_ROUTE_PREFIXES = ("/.well-known",)
@@ -193,13 +194,16 @@ def validate_routes(routes: Optional[list[dict]]) -> list[dict]:
         if path in seen:
             raise HTTPException(status_code=409, detail=f"Duplicate route path: {path}")
         seen.add(path)
+        host = str(route.get("host") or "127.0.0.1").strip()
+        if not ROUTE_HOST_RE.fullmatch(host) or ".." in host:
+            raise HTTPException(status_code=400, detail=f"Invalid upstream host for route {path}: use a hostname or IP")
         try:
             port = int(route.get("port"))
         except Exception:
             raise HTTPException(status_code=400, detail=f"Invalid port for route {path}")
         if not (1 <= port <= 65535):
             raise HTTPException(status_code=400, detail=f"Route port must be 1-65535 (got {port})")
-        clean.append({"path": path, "port": port, "strip_prefix": bool(route.get("strip_prefix", True))})
+        clean.append({"path": path, "host": host, "port": port, "strip_prefix": bool(route.get("strip_prefix", True))})
     if len(clean) > MAX_ROUTES:
         raise HTTPException(status_code=400, detail=f"At most {MAX_ROUTES} custom routes per application")
     return clean

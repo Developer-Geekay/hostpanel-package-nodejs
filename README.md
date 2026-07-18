@@ -227,12 +227,13 @@ proxied to a FastAPI backend on port 16000). Hand-editing the generated nginx vh
 survive regeneration — the plugin re-syncs vhosts on config save, restart, and startup.
 
 Instead, declare routes in the app's **Configuration** tab (Custom Reverse Proxy Routes):
-path prefix → loopback port, with an optional "strip prefix". They're stored in the DB
-(`nodejs_app_routes`) and the core vhost renderer (core ≥ 1.2.0) emits a `location` block per
-route ahead of the app's catch-all — so saving configuration *produces* the custom block
-instead of erasing it. Validation is enforced on write (plugin) **and** re-checked on read
-(core renderer): path segments limited to `[A-Za-z0-9._-]`, loopback upstreams only, max 10
-routes, `/.well-known` reserved.
+path prefix → upstream host + port, with an optional "strip prefix". Host defaults to
+`127.0.0.1`; a LAN IP or hostname targets services on other machines (http upstreams only).
+Routes are stored in the DB (`nodejs_app_routes`) and the core vhost renderer (core ≥ 1.2.0)
+emits a `location` block per route ahead of the app's catch-all — so saving configuration
+*produces* the custom block instead of erasing it. Validation is enforced on write (plugin)
+**and** re-checked on read (core renderer): path segments limited to `[A-Za-z0-9._-]`, host
+limited to hostname/IP shape, max 10 routes, `/.well-known` reserved.
 
 ## Operational Notes
 
