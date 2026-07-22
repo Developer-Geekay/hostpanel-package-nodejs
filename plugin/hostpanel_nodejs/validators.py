@@ -69,6 +69,42 @@ def validate_domain_name(domain: str) -> str:
     return value
 
 
+def resolve_domain_user(domain: str, default_user: str = "") -> str:
+    """Find the Linux user for a main domain or subdomain.
+    Subdomains use the main domain's user instead of a separate user."""
+    domain_val = (domain or "").lower().strip()
+    if not domain_val:
+        return default_user
+
+    main_domains = _load_domains()
+    domain_user_map = {d.get("domain_name", "").lower(): d.get("username", "") for d in main_domains if d.get("domain_name")}
+
+    # 1. Direct match in main domains
+    if domain_val in domain_user_map and domain_user_map[domain_val]:
+        return domain_user_map[domain_val]
+
+    # 2. Check subdomains registry for parent_domain match
+    for record in _load_subdomains():
+        if record.get("fqdn", "").lower() == domain_val:
+            parent_domain = record.get("parent_domain", "").lower()
+            if parent_domain in domain_user_map and domain_user_map[parent_domain]:
+                return domain_user_map[parent_domain]
+
+    # 3. Suffix match against main domains for multi-level or unlisted subdomains
+    best_match_len = 0
+    matched_user = ""
+    for m_domain, m_user in domain_user_map.items():
+        if m_domain and m_user and (domain_val == m_domain or domain_val.endswith("." + m_domain)):
+            if len(m_domain) > best_match_len:
+                best_match_len = len(m_domain)
+                matched_user = m_user
+
+    if matched_user:
+        return matched_user
+
+    return default_user
+
+
 def eligible_domains(current_user: Any) -> list[dict[str, str]]:
     username = current_username(current_user)
     options: list[dict[str, str]] = []
@@ -89,7 +125,7 @@ def eligible_domains(current_user: Any) -> list[dict[str, str]]:
         )
     for record in _load_subdomains():
         domain = record.get("fqdn", "")
-        owner = record.get("username", "")
+        owner = resolve_domain_user(domain, default_user=record.get("username", ""))
         if is_reserved_domain(domain):
             continue
         if not is_admin(current_user) and owner != username:
@@ -111,6 +147,7 @@ def resolve_domain(domain: str, current_user: Any) -> dict[str, str]:
         if option["domain"] == value:
             return option
     raise HTTPException(status_code=404, detail="Domain is not available for this user")
+
 
 
 def validate_node_version(version: str) -> str:

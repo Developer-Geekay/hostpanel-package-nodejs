@@ -565,6 +565,7 @@ Guardrails:
 
 - Check main domain ownership via `domain_registry._load_domains()`.
 - Check subdomain ownership via `domain_registry._load_subdomains()`.
+- Subdomains inherit and resolve to their parent main domain's system Linux user instead of requiring a separate user.
 - Standard users can only attach domains they own.
 - Exclude `cpanel.*` and `ftp.*`.
 - If a non-Node vhost exists, block unless admin explicitly confirms replacement.

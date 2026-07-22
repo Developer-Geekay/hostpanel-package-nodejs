@@ -70,8 +70,10 @@ HP_CHOWN = "/opt/hostpanel/bin/hp-chown"
 
 
 def ensure_app_directory(app: dict) -> None:
+    from hostpanel_nodejs.validators import resolve_domain_user
+    user = resolve_domain_user(app.get("domain", ""), default_user=app.get("username", ""))
     _sudo(["mkdir", "-p", app["app_root"]], check=True)
-    _sudo([HP_CHOWN, f"{app['username']}:{app['app_root']}"], check=False)
+    _sudo([HP_CHOWN, f"{user}:{app['app_root']}"], check=False)
 
 
 def working_directory(app: dict) -> str:
@@ -89,7 +91,9 @@ def working_directory(app: dict) -> str:
 
 
 def write_service(app: dict) -> None:
+    from hostpanel_nodejs.validators import resolve_domain_user
     app_id = validate_app_id(app["id"])
+    username = resolve_domain_user(app.get("domain", ""), default_user=app.get("username", ""))
     env_lines = [
         f"Environment=PORT={int(app['port'])}",
         "Environment=NODE_ENV=production",
@@ -106,7 +110,7 @@ After=network.target
 
 [Service]
 Type=simple
-User={app['username']}
+User={username}
 WorkingDirectory={working_directory(app)}
 {chr(10).join(env_lines)}
 ExecStart=/bin/bash -lc {shlex.quote('exec ' + command)}

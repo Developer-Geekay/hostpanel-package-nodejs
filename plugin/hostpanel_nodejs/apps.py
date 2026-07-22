@@ -51,7 +51,8 @@ class NodeAppUpdateRequest(BaseModel):
 
 
 def _ensure_app_access(app: dict, current_user: User) -> None:
-    if not validators.is_admin(current_user) and app["username"] != validators.current_username(current_user):
+    app_owner = validators.resolve_domain_user(app.get("domain", ""), default_user=app.get("username", ""))
+    if not validators.is_admin(current_user) and app_owner != validators.current_username(current_user):
         raise HTTPException(status_code=403, detail="Access denied")
 
 

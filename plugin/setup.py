@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="hostpanel-nodejs",
-    version="1.8.0",
+    version="1.8.1",
     packages=find_packages(),
     package_data={"hostpanel_nodejs": ["data/*"]},
     include_package_data=True,
