@@ -75,10 +75,14 @@ def on_startup():
     store.migrate()
     _ensure_deploy_helper()
     _ensure_deploy_dirs()
+    from hostpanel_nodejs import validators
     for app in store.list_apps():
         try:
-            if not os.path.exists(process.service_path(app["id"])):
-                process.write_service(app)
+            resolved_user = validators.resolve_domain_user(app.get("domain", ""), default_user=app.get("username", ""))
+            if resolved_user and resolved_user != app.get("username"):
+                store.update_app(app["id"], {"username": resolved_user})
+                app["username"] = resolved_user
+            process.write_service(app)
             state = process.status(app["id"])
             store.update_app(app["id"], {"status": state})
             # Re-assert the nginx proxy vhost. The nginx package's on_startup can

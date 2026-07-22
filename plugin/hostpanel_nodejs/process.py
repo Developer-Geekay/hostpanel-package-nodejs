@@ -132,6 +132,7 @@ def remove_service(app_id: str) -> None:
     _sudo(["systemctl", "disable", name], check=False, timeout=30)
     _sudo(["rm", "-f", service_path(app_id)], check=False)
     _sudo(["systemctl", "daemon-reload"], check=False)
+    _sudo(["systemctl", "reset-failed", name], check=False)
 
 
 def start(app_id: str) -> None:

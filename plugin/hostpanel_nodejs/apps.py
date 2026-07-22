@@ -203,6 +203,7 @@ async def delete_app(app_id: str, current_user: User = Depends(get_current_user)
     app_id = validators.validate_app_id(app_id)
     app = store.get_app(app_id)
     if not app:
+        process.remove_service(app_id)
         raise HTTPException(status_code=404, detail="Application not found")
     _ensure_app_access(app, current_user)
     process.remove_service(app_id)
