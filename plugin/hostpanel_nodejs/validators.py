@@ -105,6 +105,13 @@ def resolve_domain_user(domain: str, default_user: str = "") -> str:
     return default_user
 
 
+def _normalize_doc_root(raw_root: str, owner: str, domain: str, is_subdomain: bool = False) -> str:
+    root = (raw_root or "").strip()
+    if not root or root == "/opt/hostpanel/acme":
+        return f"/home/{owner}/public_html/{domain}" if (is_subdomain or "." in domain) else f"/home/{owner}/public_html"
+    return root
+
+
 def eligible_domains(current_user: Any) -> list[dict[str, str]]:
     username = current_username(current_user)
     options: list[dict[str, str]] = []
@@ -119,7 +126,7 @@ def eligible_domains(current_user: Any) -> list[dict[str, str]]:
             {
                 "domain": domain,
                 "username": owner,
-                "document_root": record.get("document_root") or f"/home/{owner}/public_html",
+                "document_root": _normalize_doc_root(record.get("document_root", ""), owner, domain, is_subdomain=False),
                 "type": "main",
             }
         )
@@ -134,7 +141,7 @@ def eligible_domains(current_user: Any) -> list[dict[str, str]]:
             {
                 "domain": domain,
                 "username": owner,
-                "document_root": record.get("document_root") or f"/home/{owner}/public_html/{domain}",
+                "document_root": _normalize_doc_root(record.get("document_root", ""), owner, domain, is_subdomain=True),
                 "type": "subdomain",
             }
         )
@@ -158,17 +165,31 @@ def validate_node_version(version: str) -> str:
 
 
 def default_app_root(domain_option: dict[str, str]) -> str:
-    return str(Path(domain_option["document_root"]).resolve(strict=False))
+    raw_root = domain_option.get("document_root", "")
+    owner = domain_option.get("username", "")
+    domain = domain_option.get("domain", "")
+    norm_root = _normalize_doc_root(raw_root, owner, domain, is_subdomain=domain_option.get("type") == "subdomain")
+    return str(Path(norm_root).resolve(strict=False))
 
 
 def validate_app_root(app_root: str, domain_option: dict[str, str]) -> str:
-    base = Path(domain_option["document_root"]).resolve(strict=False)
+    raw_root = domain_option.get("document_root", "")
+    owner = domain_option.get("username", "")
+    domain = domain_option.get("domain", "")
+    norm_root = _normalize_doc_root(raw_root, owner, domain, is_subdomain=domain_option.get("type") == "subdomain")
+
+    base = Path(norm_root).resolve(strict=False)
+    user_home = Path(f"/home/{owner}").resolve(strict=False) if owner else None
     requested = Path(app_root or str(base)).expanduser()
     if not requested.is_absolute():
         raise HTTPException(status_code=400, detail="Application root must be an absolute path")
     resolved = requested.resolve(strict=False)
-    if resolved != base and base not in resolved.parents:
-        raise HTTPException(status_code=400, detail="Application root must stay inside the selected domain root")
+
+    is_inside_base = (resolved == base or base in resolved.parents)
+    is_inside_user_home = (user_home is not None and (resolved == user_home or user_home in resolved.parents))
+
+    if not is_inside_base and not is_inside_user_home:
+        raise HTTPException(status_code=400, detail="Application root must stay inside the selected domain root or user home")
     return str(resolved)
 
 
